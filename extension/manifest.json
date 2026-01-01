@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Manager for LLM",
+  "version": "1.0.0",
+  "description": "Expose browser tab management as LLM-callable tools",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "preview.html",
+    "default_title": "Tab Manager"
+  },
+  "host_permissions": ["<all_urls>"]
+}

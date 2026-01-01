@@ -1,0 +1,13 @@
+[project]
+name = "browser-tabs-mcp"
+version = "0.1.0"
+description = "MCP server for browser tab management"
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.0.0"]
+
+[project.scripts]
+browser-tabs-mcp = "server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
