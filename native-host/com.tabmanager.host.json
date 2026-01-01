@@ -1,7 +1,0 @@
-{
-  "name": "com.tabmanager.host",
-  "description": "Tab Manager Native Messaging Host",
-  "path": "/Users/shivanshsingh/code/sandbox/browser-manage/native-host/host.py",
-  "type": "stdio",
-  "allowed_origins": []
-}
