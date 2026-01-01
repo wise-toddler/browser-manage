@@ -200,17 +200,20 @@ document.getElementById('close-duplicates-btn').addEventListener('click', async 
     urlToTabs[tab.url].push(tab);
   }
 
-  // Find duplicates (keep first, close rest)
+  // Find duplicates (keep first, close rest) + new tabs
   const toClose = [];
+  const newTabUrls = ['edge://newtab/', 'chrome://newtab/', 'about:newtab', 'about:blank'];
   for (const [url, tabs] of Object.entries(urlToTabs)) {
-    if (tabs.length > 1) {
+    if (newTabUrls.some(nt => url.startsWith(nt))) {
+      toClose.push(...tabs.map(t => t.id));
+    } else if (tabs.length > 1) {
       toClose.push(...tabs.slice(1).map(t => t.id));
     }
   }
 
   if (toClose.length === 0) {
-    btn.textContent = 'No duplicates';
-    setTimeout(() => { btn.textContent = 'Close Duplicates'; btn.disabled = false; }, 1500);
+    btn.textContent = 'None found';
+    setTimeout(() => { btn.textContent = 'Close Duplicates & New Tabs'; btn.disabled = false; }, 1500);
     return;
   }
 
@@ -221,7 +224,7 @@ document.getElementById('close-duplicates-btn').addEventListener('click', async 
   allTabs = await chrome.runtime.sendMessage({ action: 'getTabs' });
   render();
   btn.textContent = `Closed ${toClose.length}!`;
-  setTimeout(() => { btn.textContent = 'Close Duplicates'; btn.disabled = false; }, 1500);
+  setTimeout(() => { btn.textContent = 'Close Duplicates & New Tabs'; btn.disabled = false; }, 1500);
 });
 
 init();

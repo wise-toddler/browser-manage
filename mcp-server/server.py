@@ -353,10 +353,13 @@ async def call_tool(name: str, arguments: dict):
                 url_to_tabs[url] = []
             url_to_tabs[url].append(tab)
 
-        # Find duplicates (keep first, close rest)
+        # Find duplicates (keep first, close rest) + new tabs
         to_close = []
+        new_tab_urls = ['edge://newtab/', 'chrome://newtab/', 'about:newtab', 'about:blank']
         for url, tab_list in url_to_tabs.items():
-            if len(tab_list) > 1:
+            if any(url.startswith(nt) for nt in new_tab_urls):
+                to_close.extend([t['id'] for t in tab_list])
+            elif len(tab_list) > 1:
                 to_close.extend([t['id'] for t in tab_list[1:]])
 
         if not to_close:
