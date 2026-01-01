@@ -103,10 +103,27 @@
       font-size: 13px;
     }
     .stats span { color: #e94560; font-weight: bold; }
+    .quick-actions {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .btn-quick {
+      background: #0f3460;
+      color: #fff;
+      padding: 8px 16px;
+      font-size: 13px;
+    }
+    .btn-quick:hover { background: #1f4880; }
+    .btn-quick:disabled { opacity: 0.5; cursor: not-allowed; }
   </style>
 </head>
 <body>
   <h1>Tab Manager Preview</h1>
+
+  <div class="quick-actions">
+    <button class="btn btn-quick" id="close-duplicates-btn">Close Duplicates</button>
+  </div>
 
   <div class="stats" id="stats"></div>
 

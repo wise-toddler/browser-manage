@@ -188,4 +188,40 @@ document.getElementById('cancel-btn').addEventListener('click', () => {
   window.close();
 });
 
+document.getElementById('close-duplicates-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('close-duplicates-btn');
+  btn.disabled = true;
+  btn.textContent = 'Finding...';
+
+  // Group tabs by URL
+  const urlToTabs = {};
+  for (const tab of allTabs) {
+    if (!urlToTabs[tab.url]) urlToTabs[tab.url] = [];
+    urlToTabs[tab.url].push(tab);
+  }
+
+  // Find duplicates (keep first, close rest)
+  const toClose = [];
+  for (const [url, tabs] of Object.entries(urlToTabs)) {
+    if (tabs.length > 1) {
+      toClose.push(...tabs.slice(1).map(t => t.id));
+    }
+  }
+
+  if (toClose.length === 0) {
+    btn.textContent = 'No duplicates';
+    setTimeout(() => { btn.textContent = 'Close Duplicates'; btn.disabled = false; }, 1500);
+    return;
+  }
+
+  btn.textContent = `Closing ${toClose.length}...`;
+  await chrome.tabs.remove(toClose);
+
+  // Refresh
+  allTabs = await chrome.runtime.sendMessage({ action: 'getTabs' });
+  render();
+  btn.textContent = `Closed ${toClose.length}!`;
+  setTimeout(() => { btn.textContent = 'Close Duplicates'; btn.disabled = false; }, 1500);
+});
+
 init();
