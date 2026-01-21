@@ -54,10 +54,10 @@ browser-manage/
 ## Roadmap
 
 ### v1.1 - Memory Management
-- [ ] Add `browser_get_memory` tool (shell-based, no extension overhead)
-- [ ] Show per-process memory breakdown
+- [x] Add `browser_get_memory` tool via extension
+- [x] Show per-tab memory breakdown
+- [x] Sort tabs by memory usage (highest first)
 - [ ] Identify memory hog tabs (Logs, BigQuery, IDEs in browser)
-- [ ] Sort tabs by memory usage
 
 ### v1.2 - Time Tracking
 - [ ] Track tab open duration

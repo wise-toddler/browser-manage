@@ -6,7 +6,8 @@
   "permissions": [
     "tabs",
     "tabGroups",
-    "nativeMessaging"
+    "nativeMessaging",
+    "processes"
   ],
   "background": {
     "service_worker": "background.js"

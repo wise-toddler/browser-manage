@@ -232,6 +232,14 @@ async def list_tools():
                 "type": "object",
                 "properties": {}
             }
+        ),
+        Tool(
+            name="browser_get_memory",
+            description="Get memory usage per tab. Returns tabs sorted by memory (highest first) with total memory stats.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
         )
     ]
 
@@ -371,6 +379,12 @@ async def call_tool(name: str, arguments: dict):
             return [TextContent(type="text", text=f"Error closing tabs: {result['error']}")]
 
         return [TextContent(type="text", text=f"Closed {len(to_close)} duplicate tabs")]
+
+    elif name == "browser_get_memory":
+        result = send_extension_command("getTabsWithMemory", {})
+        if "error" in result and not result.get("tabs"):
+            return [TextContent(type="text", text=f"Error: {result['error']}. Is the extension running?")]
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

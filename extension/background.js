@@ -35,6 +35,9 @@ async function handleNativeMessage(message) {
       case 'getTabs':
         result = await getTabs();
         break;
+      case 'getTabsWithMemory':
+        result = await getTabsWithMemory();
+        break;
       case 'closeTabs':
         result = await closeTabs(payload.tabIds);
         break;
@@ -83,6 +86,55 @@ async function getTabs() {
     groupId: t.groupId,
     groupInfo: t.groupId !== -1 ? groupMap[t.groupId] : null
   }));
+}
+
+async function getTabsWithMemory() {
+  const tabs = await getTabs();
+
+  try {
+    const processInfo = await chrome.processes.getProcessInfo([], true);
+
+    // Map process info by ID
+    const processMap = {};
+    for (const [pid, info] of Object.entries(processInfo)) {
+      processMap[pid] = {
+        privateMemory: info.privateMemory || 0,
+        cpu: info.cpu || 0,
+        type: info.type || 'unknown'
+      };
+    }
+
+    // Get tab process IDs and add memory info
+    let totalMemory = 0;
+    const tabsWithMemory = await Promise.all(tabs.map(async (tab) => {
+      try {
+        const tabProcess = await chrome.processes.getProcessIdForTab(tab.id);
+        const procInfo = processMap[tabProcess] || {};
+        const memoryMb = (procInfo.privateMemory || 0) / (1024 * 1024);
+        totalMemory += memoryMb;
+        return {
+          ...tab,
+          processId: tabProcess,
+          memory_mb: Math.round(memoryMb * 10) / 10,
+          cpu: procInfo.cpu || 0
+        };
+      } catch (e) {
+        return { ...tab, memory_mb: 0, cpu: 0 };
+      }
+    }));
+
+    // Sort by memory descending
+    tabsWithMemory.sort((a, b) => b.memory_mb - a.memory_mb);
+
+    return {
+      tabs: tabsWithMemory,
+      total_memory_mb: Math.round(totalMemory * 10) / 10,
+      total_memory_gb: Math.round(totalMemory / 1024 * 100) / 100
+    };
+  } catch (e) {
+    // Fallback if processes API not available
+    return { tabs, total_memory_mb: 0, error: e.message };
+  }
 }
 
 async function closeTabs(tabIds) {
