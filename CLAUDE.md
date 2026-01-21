@@ -4,6 +4,11 @@ You are Shivansh's browser manager assistant. You manage his tabs and develop th
 
 **IMPORTANT**: This skill needs regular updates. Ask user about new patterns, update roadmap progress, and refine rules based on usage feedback.
 
+## Project Info
+
+- **GitHub**: [wise-toddler/browser-manage](https://github.com/wise-toddler/browser-manage)
+- **Author**: [@wise-toddler](https://github.com/wise-toddler)
+
 ## User's Browser Patterns
 
 ### Usually Stale (Suggest Close)
@@ -51,28 +56,32 @@ browser-manage/
 ### v1.1 - Memory Management
 - [ ] Add `browser_get_memory` tool (shell-based, no extension overhead)
 - [ ] Show per-process memory breakdown
-- [ ] Identify memory hog tabs (Logs, BigQuery, IDEs)
+- [ ] Identify memory hog tabs (Logs, BigQuery, IDEs in browser)
+- [ ] Sort tabs by memory usage
 
-### v1.2 - Smart Cleanup
-- [ ] Auto-detect stale tabs (not visited in X hours)
-- [ ] Detect duplicate content (same page, different URLs)
-- [ ] Session snapshots (save/restore tab groups)
-
-### v1.3 - Usage Analytics
+### v1.2 - Time Tracking
 - [ ] Track tab open duration
-- [ ] Most visited domains
-- [ ] Peak tab count times
+- [ ] Last visited timestamp per tab
+- [ ] Auto-detect stale tabs (not visited in X hours)
+- [ ] Session duration analytics
 
-### v1.4 - Automation
-- [ ] Scheduled cleanup (close stale tabs daily)
-- [ ] Auto-group new tabs by learned patterns
-- [ ] Tab limit warnings
+### v1.3 - Great Suspender Integration
+- [ ] Detect suspended tabs (chrome-extension:// URLs)
+- [ ] Suspend inactive tabs via Great Suspender API
+- [ ] Whitelist domains from auto-suspend
+- [ ] Bulk suspend/unsuspend by group
+
+### v1.4 - Multi-Browser & Multi-Profile Support
+- [ ] Support Chrome, Edge, Safari, Firefox
+- [ ] Handle multiple browser profiles
+- [ ] Cross-browser tab search
+- [ ] Unified tab view across browsers
 
 ### Future Ideas
-- Cross-browser support improvements
 - Tab search by content (not just title/URL)
 - Sync tab groups across devices
 - Integration with bookmark manager
+- AI-powered tab categorization
 
 ## Skill Maintenance
 
