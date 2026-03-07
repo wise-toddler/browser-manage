@@ -6,6 +6,7 @@ import subprocess
 import asyncio
 import time
 import os
+from urllib.parse import urlparse
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
@@ -14,29 +15,68 @@ server = Server("browser-tabs")
 
 CMD_FILE = "/tmp/tab-manager-cmd.json"
 RESULT_FILE = "/tmp/tab-manager-result.json"
+REGISTRY_FILE = "/tmp/tab-manager-registry.json"
 
-def send_extension_command(action: str, payload: dict, timeout: int = 10) -> dict:
+# Optional profile param added to extension-based tools
+PROFILE_PROP = {
+    "profile": {
+        "type": "string",
+        "description": "Target browser profile (e.g. 'edge-kgofki...'). Omit for default.",
+    }
+}
+
+
+def get_active_profiles() -> list:
+    """Read the registry of active browser+profile connections."""
+    if not os.path.exists(REGISTRY_FILE):
+        return []
+    try:
+        with open(REGISTRY_FILE, 'r') as f:
+            registry = json.load(f)
+        now = time.time()
+        return [v for v in registry.values() if now - v.get('last_seen', 0) < 300]
+    except Exception:
+        return []
+
+
+def send_extension_command(action: str, payload: dict, timeout: int = 10, profile: str = None) -> dict:
     """Send command to extension via file-based IPC."""
-    # Write command
-    cmd = {"action": action, "payload": payload, "timestamp": time.time()}
-    with open(CMD_FILE, 'w') as f:
-        json.dump(cmd, f)
+    # Route to specific profile if requested
+    if profile:
+        profiles = get_active_profiles()
+        match = None
+        for p in profiles:
+            key = f"{p['browser']}-{p['profile']}"
+            if profile in key:
+                match = p
+                break
+        if match:
+            return _send_to_ipc(action, payload, match['cmd_file'], match['result_file'], timeout)
+        active = [f"{p['browser']}-{p['profile']}" for p in profiles]
+        return {"error": f"Profile '{profile}' not found. Active: {active}"}
+    # Default IPC files
+    return _send_to_ipc(action, payload, CMD_FILE, RESULT_FILE, timeout)
 
-    # Wait for result
+
+def _send_to_ipc(action: str, payload: dict, cmd_path: str, result_path: str, timeout: int) -> dict:
+    """Send command via specific IPC file pair."""
+    cmd = {"action": action, "payload": payload, "timestamp": time.time()}
+    with open(cmd_path, 'w') as f:
+        json.dump(cmd, f)
     start = time.time()
     while time.time() - start < timeout:
-        if os.path.exists(RESULT_FILE):
+        if os.path.exists(result_path):
             try:
-                with open(RESULT_FILE, 'r') as f:
+                with open(result_path, 'r') as f:
                     result = json.load(f)
                 if result.get('timestamp', 0) > cmd['timestamp']:
-                    os.remove(RESULT_FILE)
-                    return result.get('data', result)  # Return data field
+                    os.remove(result_path)
+                    return result.get('data', result)
             except Exception:
                 pass
         time.sleep(0.2)
-
     return {"error": "timeout waiting for extension"}
+
 
 def run_osascript(script: str) -> str:
     """Execute AppleScript and return output."""
@@ -45,6 +85,7 @@ def run_osascript(script: str) -> str:
         capture_output=True, text=True
     )
     return result.stdout.strip() or result.stderr.strip()
+
 
 def get_tabs_data(browser: str = "Microsoft Edge") -> list:
     """Get tabs using AppleScript and parse in Python."""
@@ -94,9 +135,11 @@ end tell
 
     return tabs
 
+
 def close_tab_script(browser: str, window: int, tab: int) -> str:
     """Generate AppleScript to close a specific tab."""
     return f'tell application "{browser}" to close tab {tab} of window {window}'
+
 
 def close_tabs_by_url_script(browser: str, url_pattern: str) -> str:
     """Generate AppleScript to close tabs matching URL pattern."""
@@ -111,6 +154,14 @@ tell application "{browser}"
     end repeat
 end tell
 '''
+
+
+def _ext_result(result):
+    """Return extension result as TextContent."""
+    if isinstance(result, dict) and "error" in result:
+        return [TextContent(type="text", text=f"Error: {result['error']}. Is the extension running?")]
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
 
 @server.list_tools()
 async def list_tools():
@@ -172,7 +223,7 @@ async def list_tools():
         ),
         Tool(
             name="browser_suggest_cleanup",
-            description="Analyze tabs and suggest which to close and how to group the rest. Returns a cleanup plan for user approval.",
+            description="Analyze tabs and suggest which to close and how to group the rest.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -182,7 +233,7 @@ async def list_tools():
                     },
                     "close_patterns": {
                         "type": "array",
-                        "description": "URL patterns to mark for closing (e.g., 'cart', 'checkout', 'login')",
+                        "description": "URL patterns to mark for closing",
                         "items": {"type": "string"}
                     },
                     "group_by_domain": {
@@ -195,57 +246,117 @@ async def list_tools():
         ),
         Tool(
             name="browser_create_group",
-            description="Create a tab group with specified tabs. Requires the browser extension to be running. Use browser_get_tabs_ext to get Chrome tab IDs first.",
+            description="Create a tab group with specified tabs via extension.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Name for the tab group"
-                    },
-                    "color": {
-                        "type": "string",
-                        "description": "Color: grey, blue, red, yellow, green, pink, purple, cyan, orange",
-                        "default": "blue"
-                    },
-                    "tab_ids": {
-                        "type": "array",
-                        "description": "List of Chrome tab IDs to group (get from browser_get_tabs_ext)",
-                        "items": {"type": "integer"}
-                    }
+                    "name": {"type": "string", "description": "Name for the tab group"},
+                    "color": {"type": "string", "description": "Color: grey, blue, red, yellow, green, pink, purple, cyan, orange", "default": "blue"},
+                    "tab_ids": {"type": "array", "description": "Chrome tab IDs to group", "items": {"type": "integer"}},
+                    **PROFILE_PROP
                 },
                 "required": ["name", "tab_ids"]
             }
         ),
         Tool(
             name="browser_get_tabs_ext",
-            description="Get tabs via extension with Chrome tab IDs (required for grouping). Use this instead of browser_list_tabs when you need to create groups.",
-            inputSchema={
-                "type": "object",
-                "properties": {}
-            }
+            description="Get tabs via extension with Chrome tab IDs (required for grouping).",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
         ),
         Tool(
             name="browser_close_duplicates",
-            description="Find and close all duplicate tabs (same URL). Keeps one tab per unique URL.",
-            inputSchema={
-                "type": "object",
-                "properties": {}
-            }
+            description="Find and close all duplicate tabs (same URL). Keeps one per URL.",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
         ),
         Tool(
             name="browser_get_memory",
-            description="Get memory usage per tab. Returns tabs sorted by memory (highest first) with total memory stats.",
+            description="Get memory usage per tab with memory hog detection. Returns tabs sorted by memory.",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
+        # v1.2 - Time Tracking
+        Tool(
+            name="browser_get_tab_activity",
+            description="Get tab activity data: open duration, last visited, idle time for each tab.",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
+        Tool(
+            name="browser_get_stale_tabs",
+            description="Find tabs not visited in X hours. Default threshold is 2 hours.",
             inputSchema={
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "threshold_hours": {"type": "number", "description": "Hours of inactivity to consider stale", "default": 2},
+                    **PROFILE_PROP
+                }
             }
-        )
+        ),
+        # v1.3 - Great Suspender
+        Tool(
+            name="browser_list_suspended",
+            description="List all suspended tabs with their original URLs.",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
+        Tool(
+            name="browser_suspend_tabs",
+            description="Suspend tabs by tab IDs via Great Suspender. Respects whitelist.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_ids": {"type": "array", "description": "Chrome tab IDs to suspend", "items": {"type": "integer"}},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_ids"]
+            }
+        ),
+        Tool(
+            name="browser_unsuspend_tabs",
+            description="Unsuspend (restore) suspended tabs by tab IDs.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_ids": {"type": "array", "description": "Chrome tab IDs to restore", "items": {"type": "integer"}},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_ids"]
+            }
+        ),
+        Tool(
+            name="browser_suspend_whitelist",
+            description="Manage domains exempt from suspension. Actions: list, add, remove.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "list, add, or remove", "enum": ["list", "add", "remove"]},
+                    "domains": {"type": "array", "description": "Domains to add/remove", "items": {"type": "string"}},
+                    **PROFILE_PROP
+                },
+                "required": ["action"]
+            }
+        ),
+        # v1.4 - Multi-Profile
+        Tool(
+            name="browser_list_profiles",
+            description="List all active browser profiles connected via extension.",
+            inputSchema={"type": "object", "properties": {}}
+        ),
+        Tool(
+            name="browser_search_all_tabs",
+            description="Search tabs across all browsers and profiles by title or URL pattern.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search string to match against tab title or URL"}
+                },
+                "required": ["query"]
+            }
+        ),
     ]
+
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict):
     browser = arguments.get("browser", "Microsoft Edge")
+    profile = arguments.get("profile")
 
     if name == "browser_list_tabs":
         tabs = get_tabs_data(browser)
@@ -254,20 +365,16 @@ async def call_tool(name: str, arguments: dict):
     elif name == "browser_close_tabs":
         url_pattern = arguments.get("url_pattern")
         tabs = arguments.get("tabs", [])
-
         if url_pattern:
             script = close_tabs_by_url_script(browser, url_pattern)
             run_osascript(script)
             return [TextContent(type="text", text=f"Closed tabs matching: {url_pattern}")]
-
         if tabs:
-            # Close in reverse order to avoid index shifting
             tabs_sorted = sorted(tabs, key=lambda x: (x['window'], x['tab']), reverse=True)
             for t in tabs_sorted:
                 script = close_tab_script(browser, t['window'], t['tab'])
                 run_osascript(script)
             return [TextContent(type="text", text=f"Closed {len(tabs)} tabs")]
-
         return [TextContent(type="text", text="No tabs specified to close")]
 
     elif name == "browser_count_windows":
@@ -279,37 +386,27 @@ async def call_tool(name: str, arguments: dict):
         tabs = get_tabs_data(browser)
         if not tabs:
             return [TextContent(type="text", text="No tabs found")]
-
         close_patterns = arguments.get("close_patterns", [])
         group_by_domain = arguments.get("group_by_domain", True)
-
         to_close = []
         to_keep = []
-
         for tab in tabs:
             url = tab.get('url', '')
-            should_close = any(p in url for p in close_patterns)
-            if should_close:
+            if any(p in url for p in close_patterns):
                 to_close.append(tab)
             else:
                 to_keep.append(tab)
-
-        # Group by domain
         groups = {}
         if group_by_domain:
             for tab in to_keep:
                 url = tab.get('url', '')
                 try:
-                    from urllib.parse import urlparse
-                    domain = urlparse(url).netloc
-                    domain = domain.replace('www.', '')
+                    domain = urlparse(url).netloc.replace('www.', '')
                 except Exception:
                     domain = 'other'
-
                 if domain not in groups:
                     groups[domain] = []
                 groups[domain].append(tab)
-
         plan = {
             "to_close": to_close,
             "groups": groups,
@@ -320,48 +417,32 @@ async def call_tool(name: str, arguments: dict):
                 "groups": len(groups)
             }
         }
-
         return [TextContent(type="text", text=json.dumps(plan, indent=2))]
 
     elif name == "browser_create_group":
         group_name = arguments.get("name")
         color = arguments.get("color", "blue")
         tab_ids = arguments.get("tab_ids", [])
-
         if not group_name or not tab_ids:
             return [TextContent(type="text", text="Error: name and tab_ids are required")]
-
-        result = send_extension_command("createGroup", {
-            "name": group_name,
-            "color": color,
-            "tabIds": tab_ids
-        })
-
+        result = send_extension_command("createGroup", {"name": group_name, "color": color, "tabIds": tab_ids}, profile=profile)
         if "error" in result:
             return [TextContent(type="text", text=f"Error: {result['error']}")]
-
         return [TextContent(type="text", text=f"Created group '{group_name}' with {len(tab_ids)} tabs")]
 
     elif name == "browser_get_tabs_ext":
-        result = send_extension_command("getTabs", {})
-        if "error" in result:
-            return [TextContent(type="text", text=f"Error: {result['error']}. Is the extension running?")]
-        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+        return _ext_result(send_extension_command("getTabs", {}, profile=profile))
 
     elif name == "browser_close_duplicates":
-        tabs = send_extension_command("getTabs", {})
-        if "error" in tabs:
+        tabs = send_extension_command("getTabs", {}, profile=profile)
+        if isinstance(tabs, dict) and "error" in tabs:
             return [TextContent(type="text", text=f"Error: {tabs['error']}. Is the extension running?")]
-
-        # Group tabs by URL
         url_to_tabs = {}
         for tab in tabs:
             url = tab.get('url', '')
             if url not in url_to_tabs:
                 url_to_tabs[url] = []
             url_to_tabs[url].append(tab)
-
-        # Find duplicates (keep first, close rest) + new tabs
         to_close = []
         new_tab_urls = ['edge://newtab/', 'chrome://newtab/', 'about:newtab', 'about:blank']
         for url, tab_list in url_to_tabs.items():
@@ -369,22 +450,61 @@ async def call_tool(name: str, arguments: dict):
                 to_close.extend([t['id'] for t in tab_list])
             elif len(tab_list) > 1:
                 to_close.extend([t['id'] for t in tab_list[1:]])
-
         if not to_close:
             return [TextContent(type="text", text="No duplicate tabs found")]
-
-        # Close duplicates via extension
-        result = send_extension_command("closeTabs", {"tabIds": to_close})
-        if "error" in result:
+        result = send_extension_command("closeTabs", {"tabIds": to_close}, profile=profile)
+        if isinstance(result, dict) and "error" in result:
             return [TextContent(type="text", text=f"Error closing tabs: {result['error']}")]
-
         return [TextContent(type="text", text=f"Closed {len(to_close)} duplicate tabs")]
 
     elif name == "browser_get_memory":
-        result = send_extension_command("getTabsWithMemory", {})
-        if "error" in result and not result.get("tabs"):
+        result = send_extension_command("getTabsWithMemory", {}, profile=profile)
+        if isinstance(result, dict) and "error" in result and not result.get("tabs"):
             return [TextContent(type="text", text=f"Error: {result['error']}. Is the extension running?")]
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    # v1.2 - Time Tracking
+    elif name == "browser_get_tab_activity":
+        return _ext_result(send_extension_command("getTabActivity", {}, profile=profile))
+
+    elif name == "browser_get_stale_tabs":
+        threshold = arguments.get("threshold_hours", 2)
+        return _ext_result(send_extension_command("getStaleTabs", {"thresholdHours": threshold}, profile=profile))
+
+    # v1.3 - Great Suspender
+    elif name == "browser_list_suspended":
+        return _ext_result(send_extension_command("listSuspended", {}, profile=profile))
+
+    elif name == "browser_suspend_tabs":
+        tab_ids = arguments.get("tab_ids", [])
+        return _ext_result(send_extension_command("suspendTabs", {"tabIds": tab_ids}, profile=profile))
+
+    elif name == "browser_unsuspend_tabs":
+        tab_ids = arguments.get("tab_ids", [])
+        return _ext_result(send_extension_command("unsuspendTabs", {"tabIds": tab_ids}, profile=profile))
+
+    elif name == "browser_suspend_whitelist":
+        action = arguments.get("action", "list")
+        domains = arguments.get("domains", [])
+        return _ext_result(send_extension_command("suspendWhitelist", {"action": action, "domains": domains}, profile=profile))
+
+    # v1.4 - Multi-Profile
+    elif name == "browser_list_profiles":
+        profiles = get_active_profiles()
+        return [TextContent(type="text", text=json.dumps(profiles, indent=2))]
+
+    elif name == "browser_search_all_tabs":
+        query = arguments.get("query", "").lower()
+        profiles = get_active_profiles()
+        all_results = []
+        for p in profiles:
+            tabs = _send_to_ipc("getTabs", {}, p['cmd_file'], p['result_file'], 10)
+            if isinstance(tabs, list):
+                for t in tabs:
+                    if query in t.get('title', '').lower() or query in t.get('url', '').lower():
+                        t['profile'] = f"{p['browser']}-{p['profile']}"
+                        all_results.append(t)
+        return [TextContent(type="text", text=json.dumps(all_results, indent=2))]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

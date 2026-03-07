@@ -57,25 +57,25 @@ browser-manage/
 - [x] Add `browser_get_memory` tool via extension
 - [x] Show per-tab memory breakdown
 - [x] Sort tabs by memory usage (highest first)
-- [ ] Identify memory hog tabs (Logs, BigQuery, IDEs in browser)
+- [x] Identify memory hog tabs (URL patterns + actual memory >100MB via Debugger API)
 
 ### v1.2 - Time Tracking
-- [ ] Track tab open duration
-- [ ] Last visited timestamp per tab
-- [ ] Auto-detect stale tabs (not visited in X hours)
-- [ ] Session duration analytics
+- [x] Track tab open duration
+- [x] Last visited timestamp per tab
+- [x] Auto-detect stale tabs (not visited in X hours)
+- [x] Session duration analytics
 
 ### v1.3 - Great Suspender Integration
-- [ ] Detect suspended tabs (chrome-extension:// URLs)
-- [ ] Suspend inactive tabs via Great Suspender API
-- [ ] Whitelist domains from auto-suspend
-- [ ] Bulk suspend/unsuspend by group
+- [x] Detect suspended tabs (chrome-extension:// URLs)
+- [x] Suspend inactive tabs via Great Suspender API
+- [x] Whitelist domains from auto-suspend
+- [x] Bulk suspend/unsuspend by group
 
 ### v1.4 - Multi-Browser & Multi-Profile Support
-- [ ] Support Chrome, Edge, Safari, Firefox
-- [ ] Handle multiple browser profiles
-- [ ] Cross-browser tab search
-- [ ] Unified tab view across browsers
+- [x] Support Chrome, Edge (via native messaging + per-profile IPC)
+- [x] Handle multiple browser profiles
+- [x] Cross-browser tab search
+- [x] Unified tab view across browsers
 
 ### Future Ideas
 - Tab search by content (not just title/URL)
