@@ -2,145 +2,168 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Tab Manager Preview</title>
+  <title>Tab Manager</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      width: 450px;
-      min-height: 400px;
+      width: 480px;
+      min-height: 300px;
+      max-height: 580px;
+      overflow-y: auto;
       padding: 16px;
-      background: #1a1a2e;
-      color: #eee;
+      background: #0f0f1a;
+      color: #e0e0e0;
     }
-    h1 { font-size: 18px; margin-bottom: 16px; color: #fff; }
-    h2 { font-size: 14px; margin: 16px 0 8px; color: #aaa; text-transform: uppercase; }
-    .section { margin-bottom: 20px; }
+    body::-webkit-scrollbar { width: 6px; }
+    body::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+    /* Header */
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .header h1 { font-size: 16px; font-weight: 600; color: #fff; }
+    .header .profile-badge {
+      font-size: 11px; background: #1e293b; padding: 3px 8px; border-radius: 10px; color: #94a3b8;
+    }
+
+    /* Stats cards */
+    .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+    .stat-card {
+      background: #1a1a2e; border-radius: 8px; padding: 10px; text-align: center;
+      border: 1px solid #1e293b;
+    }
+    .stat-card .value { font-size: 22px; font-weight: 700; color: #fff; }
+    .stat-card .label { font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 2px; }
+    .stat-card.warn .value { color: #f59e0b; }
+    .stat-card.danger .value { color: #ef4444; }
+
+    /* Tabs */
+    .tabs-nav { display: flex; gap: 2px; margin-bottom: 12px; background: #1a1a2e; border-radius: 8px; padding: 3px; }
+    .tab-btn {
+      flex: 1; padding: 7px 0; border: none; background: transparent; color: #64748b;
+      font-size: 12px; font-weight: 500; border-radius: 6px; cursor: pointer;
+    }
+    .tab-btn.active { background: #2d2d44; color: #fff; }
+    .tab-btn:hover:not(.active) { color: #94a3b8; }
+    .tab-btn .count { font-size: 10px; background: #333; padding: 1px 5px; border-radius: 8px; margin-left: 4px; }
+
+    /* Tab list */
+    .tab-list { max-height: 320px; overflow-y: auto; }
+    .tab-list::-webkit-scrollbar { width: 4px; }
+    .tab-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
     .tab-item {
-      display: flex;
-      align-items: center;
-      padding: 8px;
-      background: #16213e;
-      border-radius: 6px;
-      margin-bottom: 6px;
-      font-size: 13px;
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      background: #1a1a2e; border-radius: 6px; margin-bottom: 4px;
+      border: 1px solid transparent; cursor: default; font-size: 12px;
     }
-    .tab-item:hover { background: #1f3460; }
-    .tab-item input[type="checkbox"] { margin-right: 10px; }
-    .tab-title {
-      flex: 1;
+    .tab-item:hover { border-color: #2d2d44; background: #1e1e32; }
+    .tab-item .favicon { width: 16px; height: 16px; border-radius: 2px; flex-shrink: 0; }
+    .tab-item .info { flex: 1; min-width: 0; }
+    .tab-item .title {
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #e2e8f0;
+    }
+    .tab-item .url {
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      font-size: 10px; color: #475569; margin-top: 1px;
+    }
+    .tab-item .meta { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+    .badge {
+      font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 600;
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
-    .tab-url {
-      color: #666;
-      font-size: 11px;
-      margin-left: 8px;
-      max-width: 150px;
-      overflow: hidden;
-      text-overflow: ellipsis;
+    .badge-memory { background: #1e3a5f; color: #60a5fa; }
+    .badge-hog { background: #5b2121; color: #fca5a5; }
+    .badge-stale { background: #4a3728; color: #fbbf24; }
+    .badge-suspended { background: #1e3a2e; color: #6ee7b7; }
+    .badge-group { background: #2d2250; color: #c4b5fd; }
+
+    .btn-close-tab {
+      background: none; border: none; color: #475569; cursor: pointer;
+      font-size: 14px; padding: 2px 4px; border-radius: 4px; line-height: 1;
     }
-    .group-section {
-      background: #0f3460;
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 12px;
+    .btn-close-tab:hover { color: #ef4444; background: #2a1a1a; }
+
+    /* Quick actions */
+    .actions-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .btn-action {
+      padding: 6px 12px; border: 1px solid #2d2d44; background: #1a1a2e;
+      color: #94a3b8; border-radius: 6px; font-size: 11px; cursor: pointer;
+      display: flex; align-items: center; gap: 4px;
     }
-    .group-header {
-      display: flex;
-      align-items: center;
-      margin-bottom: 8px;
+    .btn-action:hover { background: #2d2d44; color: #fff; border-color: #3d3d54; }
+    .btn-action:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-action.danger:hover { background: #3b1a1a; border-color: #ef4444; color: #fca5a5; }
+
+    /* Empty state */
+    .empty { color: #475569; font-size: 12px; text-align: center; padding: 20px; }
+
+    /* Pending changes banner */
+    .pending-banner {
+      background: #1e3a5f; border: 1px solid #2563eb; border-radius: 8px;
+      padding: 10px 14px; margin-bottom: 12px; display: flex;
+      align-items: center; justify-content: space-between;
     }
-    .group-name {
-      background: transparent;
-      border: 1px solid #444;
-      color: #fff;
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-size: 14px;
-      flex: 1;
+    .pending-banner .text { font-size: 12px; color: #93c5fd; }
+    .pending-banner .btn-apply {
+      padding: 5px 14px; background: #2563eb; color: #fff; border: none;
+      border-radius: 5px; font-size: 12px; font-weight: 500; cursor: pointer;
     }
-    .group-color {
-      margin-left: 8px;
-      padding: 4px;
-      background: transparent;
-      border: 1px solid #444;
-      border-radius: 4px;
-      color: #fff;
+    .pending-banner .btn-apply:hover { background: #3b82f6; }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+      background: #1e293b; color: #e2e8f0; padding: 8px 16px; border-radius: 6px;
+      font-size: 12px; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+      border: 1px solid #334155;
     }
-    .btn {
-      padding: 10px 20px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
+    .toast.show { opacity: 1; }
+
+    /* Loading */
+    .loading { text-align: center; padding: 40px; color: #475569; }
+    .spinner {
+      width: 24px; height: 24px; border: 2px solid #2d2d44; border-top-color: #60a5fa;
+      border-radius: 50%; animation: spin 0.6s linear infinite; margin: 0 auto 8px;
     }
-    .btn-primary {
-      background: #e94560;
-      color: #fff;
-    }
-    .btn-primary:hover { background: #ff6b6b; }
-    .btn-secondary {
-      background: #333;
-      color: #fff;
-      margin-right: 10px;
-    }
-    .actions {
-      display: flex;
-      justify-content: flex-end;
-      margin-top: 20px;
-      padding-top: 16px;
-      border-top: 1px solid #333;
-    }
-    .empty { color: #666; font-style: italic; padding: 12px; }
-    .stats {
-      background: #16213e;
-      padding: 12px;
-      border-radius: 6px;
-      margin-bottom: 16px;
-      font-size: 13px;
-    }
-    .stats span { color: #e94560; font-weight: bold; }
-    .quick-actions {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-    .btn-quick {
-      background: #0f3460;
-      color: #fff;
-      padding: 8px 16px;
-      font-size: 13px;
-    }
-    .btn-quick:hover { background: #1f4880; }
-    .btn-quick:disabled { opacity: 0.5; cursor: not-allowed; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
-  <h1>Tab Manager Preview</h1>
-
-  <div class="quick-actions">
-    <button class="btn btn-quick" id="close-duplicates-btn">Close Duplicates & New Tabs</button>
+  <div class="header">
+    <h1>Tab Manager</h1>
+    <span class="profile-badge" id="profile-badge">loading...</span>
   </div>
 
-  <div class="stats" id="stats"></div>
-
-  <div class="section" id="close-section">
-    <h2>Tabs to Close</h2>
-    <div id="close-list"></div>
+  <div class="stats-row" id="stats-row">
+    <div class="stat-card"><div class="value" id="stat-total">-</div><div class="label">Tabs</div></div>
+    <div class="stat-card"><div class="value" id="stat-memory">-</div><div class="label">Memory</div></div>
+    <div class="stat-card"><div class="value" id="stat-stale">-</div><div class="label">Stale</div></div>
+    <div class="stat-card"><div class="value" id="stat-groups">-</div><div class="label">Groups</div></div>
   </div>
 
-  <div class="section" id="groups-section">
-    <h2>Groups to Create</h2>
-    <div id="groups-list"></div>
+  <div id="pending-banner" class="pending-banner" style="display:none">
+    <span class="text" id="pending-text"></span>
+    <button class="btn-apply" id="apply-btn">Apply</button>
   </div>
 
-  <div class="actions">
-    <button class="btn btn-secondary" id="cancel-btn">Cancel</button>
-    <button class="btn btn-primary" id="apply-btn">Apply Changes</button>
+  <div class="actions-bar" id="actions-bar">
+    <button class="btn-action" id="btn-dupes">Close Duplicates</button>
+    <button class="btn-action" id="btn-suspend-stale">Suspend Stale</button>
+    <button class="btn-action" id="btn-refresh">Refresh</button>
   </div>
+
+  <div class="tabs-nav" id="tabs-nav">
+    <button class="tab-btn active" data-view="all">All</button>
+    <button class="tab-btn" data-view="hogs">Hogs</button>
+    <button class="tab-btn" data-view="stale">Stale</button>
+    <button class="tab-btn" data-view="suspended">Suspended</button>
+  </div>
+
+  <div class="tab-list" id="tab-list">
+    <div class="loading"><div class="spinner"></div>Loading tabs...</div>
+  </div>
+
+  <div class="toast" id="toast"></div>
 
   <script src="preview.js"></script>
 </body>

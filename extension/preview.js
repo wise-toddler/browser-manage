@@ -1,206 +1,220 @@
 let allTabs = [];
+let memoryData = null;
+let staleData = [];
+let suspendedData = [];
 let pendingChanges = null;
+let currentView = 'all';
 
-const COLORS = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
+const STALE_THRESHOLD_HOURS = 2;
 
 async function init() {
-  allTabs = await chrome.runtime.sendMessage({ action: 'getTabs' });
-  pendingChanges = await chrome.runtime.sendMessage({ action: 'getPendingChanges' });
+  try {
+    // Load tabs and pending changes in parallel
+    const [tabs, pending] = await Promise.all([
+      chrome.runtime.sendMessage({ action: 'getTabs' }),
+      chrome.runtime.sendMessage({ action: 'getPendingChanges' }),
+    ]);
+    allTabs = tabs || [];
+    pendingChanges = pending;
 
-  if (!pendingChanges) {
-    pendingChanges = { toClose: [], groups: {} };
+    // Set profile badge
+    const data = await chrome.storage.local.get('profileId');
+    const ua = navigator.userAgent;
+    const browser = ua.includes('Edg/') ? 'Edge' : 'Chrome';
+    document.getElementById('profile-badge').textContent = `${browser} · ${data.profileId || 'unknown'}`;
+
+    renderStats();
+    renderPending();
+    renderTabs();
+    updateTabCounts();
+
+    // Load memory and stale data in background
+    loadExtendedData();
+  } catch (e) {
+    document.getElementById('tab-list').innerHTML = `<div class="empty">Error: ${e.message}</div>`;
   }
-
-  render();
 }
 
-function getTabById(id) {
-  return allTabs.find(t => t.id === id);
+async function loadExtendedData() {
+  // These use the background script's internal functions via message passing
+  try {
+    // Get tab tracking data from storage
+    const storage = await chrome.storage.local.get('tabTracking');
+    const tracking = storage.tabTracking || {};
+    const now = Date.now();
+    const threshold = STALE_THRESHOLD_HOURS * 3600000;
+
+    staleData = allTabs.filter(t => {
+      const tr = tracking[t.id];
+      return tr && (now - tr.lastVisitedAt) > threshold;
+    }).map(t => {
+      const tr = tracking[t.id];
+      return { ...t, idle_mins: Math.round((now - tr.lastVisitedAt) / 60000) };
+    });
+
+    // Detect suspended tabs
+    const suspendPattern = /^chrome-extension:\/\/[a-z]+\/suspended\.html/;
+    suspendedData = allTabs.filter(t => suspendPattern.test(t.url)).map(t => {
+      const hash = t.url.split('#')[1] || '';
+      const params = new URLSearchParams(hash);
+      return { ...t, original_url: params.get('uri') || params.get('url') || '', original_title: params.get('ttl') || params.get('title') || '' };
+    });
+
+    updateTabCounts();
+    // Re-render if on a filtered view
+    if (currentView !== 'all') renderTabs();
+
+    // Update stats
+    document.getElementById('stat-stale').textContent = staleData.length;
+    if (staleData.length > 3) {
+      document.getElementById('stat-stale').closest('.stat-card').classList.add('warn');
+    }
+  } catch (e) {
+    console.log('Extended data load error:', e);
+  }
 }
 
-function render() {
-  renderStats();
-  renderCloseList();
-  renderGroups();
+function updateTabCounts() {
+  const counts = { all: allTabs.length, hogs: 0, stale: staleData.length, suspended: suspendedData.length };
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const view = btn.dataset.view;
+    const count = counts[view] || 0;
+    const countEl = btn.querySelector('.count');
+    if (countEl) countEl.textContent = count;
+    else btn.innerHTML = `${btn.textContent.trim()} <span class="count">${count}</span>`;
+  });
 }
 
 function renderStats() {
-  const statsEl = document.getElementById('stats');
+  document.getElementById('stat-total').textContent = allTabs.length;
+  // Count unique groups
+  const groups = new Set(allTabs.filter(t => t.groupId && t.groupId !== -1).map(t => t.groupId));
+  document.getElementById('stat-groups').textContent = groups.size;
+  document.getElementById('stat-memory').textContent = '-';
+  document.getElementById('stat-stale').textContent = '-';
+}
+
+function renderPending() {
+  const banner = document.getElementById('pending-banner');
+  if (!pendingChanges || (!pendingChanges.toClose?.length && !Object.keys(pendingChanges.groups || {}).length)) {
+    banner.style.display = 'none';
+    return;
+  }
   const closeCount = pendingChanges.toClose?.length || 0;
   const groupCount = Object.keys(pendingChanges.groups || {}).length;
-
-  statsEl.innerHTML = `
-    <span>${closeCount}</span> tabs to close |
-    <span>${groupCount}</span> groups to create |
-    <span>${allTabs.length}</span> total tabs
-  `;
+  document.getElementById('pending-text').textContent =
+    `${closeCount} to close, ${groupCount} groups to create`;
+  banner.style.display = 'flex';
 }
 
-function renderCloseList() {
-  const listEl = document.getElementById('close-list');
-  const toClose = pendingChanges.toClose || [];
+function renderTabs() {
+  const listEl = document.getElementById('tab-list');
+  let tabs = [];
 
-  if (toClose.length === 0) {
-    listEl.innerHTML = '<div class="empty">No tabs marked for closing</div>';
+  switch (currentView) {
+    case 'hogs':
+      // Show tabs sorted by a heuristic (grouped tabs with known heavy patterns)
+      tabs = allTabs.filter(t => {
+        const patterns = ['console.cloud.google.com', 'bigquery', 'figma.com', 'sentry.io', 'datadoghq.com', 'colab.research', 'vscode.dev', 'github.dev'];
+        return patterns.some(p => t.url.includes(p));
+      });
+      break;
+    case 'stale':
+      tabs = staleData;
+      break;
+    case 'suspended':
+      tabs = suspendedData;
+      break;
+    default:
+      tabs = allTabs;
+  }
+
+  if (tabs.length === 0) {
+    listEl.innerHTML = `<div class="empty">No ${currentView} tabs found</div>`;
     return;
   }
 
-  listEl.innerHTML = toClose.map(tabId => {
-    const tab = getTabById(tabId);
-    if (!tab) return '';
+  listEl.innerHTML = tabs.map(t => {
+    const badges = [];
+    if (staleData.find(s => s.id === t.id)) {
+      const mins = staleData.find(s => s.id === t.id).idle_mins;
+      badges.push(`<span class="badge badge-stale">${mins >= 60 ? Math.round(mins/60) + 'h' : mins + 'm'} idle</span>`);
+    }
+    if (t.groupInfo) {
+      badges.push(`<span class="badge badge-group">${escapeHtml(t.groupInfo.title || t.groupInfo.color)}</span>`);
+    }
+    if (t.original_url) {
+      badges.push(`<span class="badge badge-suspended">suspended</span>`);
+    }
+    const domain = getDomain(t.original_url || t.url);
+    const favicon = `https://www.google.com/s2/favicons?sz=16&domain=${domain}`;
+    const title = t.original_title || t.title || 'Untitled';
+
     return `
-      <div class="tab-item">
-        <input type="checkbox" checked data-tab-id="${tabId}" class="close-checkbox">
-        <span class="tab-title">${escapeHtml(tab.title)}</span>
-        <span class="tab-url">${getDomain(tab.url)}</span>
+      <div class="tab-item" data-tab-id="${t.id}">
+        <img class="favicon" src="${favicon}" onerror="this.style.display='none'">
+        <div class="info">
+          <div class="title">${escapeHtml(title)}</div>
+          <div class="url">${escapeHtml(domain)}</div>
+        </div>
+        <div class="meta">
+          ${badges.join('')}
+          <button class="btn-close-tab" data-tab-id="${t.id}" title="Close tab">&times;</button>
+        </div>
       </div>
     `;
   }).join('');
 
-  listEl.querySelectorAll('.close-checkbox').forEach(cb => {
-    cb.addEventListener('change', (e) => {
-      const tabId = parseInt(e.target.dataset.tabId);
-      if (e.target.checked) {
-        if (!pendingChanges.toClose.includes(tabId)) {
-          pendingChanges.toClose.push(tabId);
-        }
-      } else {
-        pendingChanges.toClose = pendingChanges.toClose.filter(id => id !== tabId);
-      }
-      updatePending();
+  // Close tab buttons
+  listEl.querySelectorAll('.btn-close-tab').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const tabId = parseInt(btn.dataset.tabId);
+      await chrome.tabs.remove(tabId);
+      allTabs = allTabs.filter(t => t.id !== tabId);
+      staleData = staleData.filter(t => t.id !== tabId);
+      suspendedData = suspendedData.filter(t => t.id !== tabId);
       renderStats();
+      updateTabCounts();
+      renderTabs();
+      showToast('Tab closed');
+    });
+  });
+
+  // Click to activate tab
+  listEl.querySelectorAll('.tab-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (e.target.closest('.btn-close-tab')) return;
+      const tabId = parseInt(item.dataset.tabId);
+      chrome.tabs.update(tabId, { active: true });
+      const tab = allTabs.find(t => t.id === tabId);
+      if (tab) chrome.windows.update(tab.windowId, { focused: true });
     });
   });
 }
 
-function renderGroups() {
-  const listEl = document.getElementById('groups-list');
-  const groups = pendingChanges.groups || {};
-
-  if (Object.keys(groups).length === 0) {
-    listEl.innerHTML = '<div class="empty">No groups proposed</div>';
-    return;
-  }
-
-  listEl.innerHTML = Object.entries(groups).map(([name, config]) => {
-    const colorOptions = COLORS.map(c =>
-      `<option value="${c}" ${config.color === c ? 'selected' : ''}>${c}</option>`
-    ).join('');
-
-    const tabsHtml = (config.tabIds || []).map(tabId => {
-      const tab = getTabById(tabId);
-      if (!tab) return '';
-      return `
-        <div class="tab-item">
-          <input type="checkbox" checked data-group="${name}" data-tab-id="${tabId}" class="group-tab-checkbox">
-          <span class="tab-title">${escapeHtml(tab.title)}</span>
-          <span class="tab-url">${getDomain(tab.url)}</span>
-        </div>
-      `;
-    }).join('');
-
-    return `
-      <div class="group-section" data-group-name="${escapeHtml(name)}">
-        <div class="group-header">
-          <input type="text" class="group-name" value="${escapeHtml(name)}" data-original="${escapeHtml(name)}">
-          <select class="group-color" data-group="${escapeHtml(name)}">
-            ${colorOptions}
-          </select>
-        </div>
-        ${tabsHtml}
-      </div>
-    `;
-  }).join('');
-
-  // Event listeners for group name changes
-  listEl.querySelectorAll('.group-name').forEach(input => {
-    input.addEventListener('change', (e) => {
-      const oldName = e.target.dataset.original;
-      const newName = e.target.value.trim();
-      if (newName && newName !== oldName && pendingChanges.groups[oldName]) {
-        pendingChanges.groups[newName] = pendingChanges.groups[oldName];
-        delete pendingChanges.groups[oldName];
-        e.target.dataset.original = newName;
-        updatePending();
-      }
-    });
-  });
-
-  // Event listeners for color changes
-  listEl.querySelectorAll('.group-color').forEach(select => {
-    select.addEventListener('change', (e) => {
-      const groupName = e.target.dataset.group;
-      if (pendingChanges.groups[groupName]) {
-        pendingChanges.groups[groupName].color = e.target.value;
-        updatePending();
-      }
-    });
-  });
-
-  // Event listeners for removing tabs from groups
-  listEl.querySelectorAll('.group-tab-checkbox').forEach(cb => {
-    cb.addEventListener('change', (e) => {
-      const groupName = e.target.dataset.group;
-      const tabId = parseInt(e.target.dataset.tabId);
-      if (pendingChanges.groups[groupName]) {
-        if (e.target.checked) {
-          if (!pendingChanges.groups[groupName].tabIds.includes(tabId)) {
-            pendingChanges.groups[groupName].tabIds.push(tabId);
-          }
-        } else {
-          pendingChanges.groups[groupName].tabIds =
-            pendingChanges.groups[groupName].tabIds.filter(id => id !== tabId);
-        }
-        updatePending();
-        renderStats();
-      }
-    });
-  });
-}
-
-async function updatePending() {
-  await chrome.runtime.sendMessage({ action: 'updatePendingChanges', changes: pendingChanges });
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function getDomain(url) {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
-}
-
-document.getElementById('apply-btn').addEventListener('click', async () => {
-  const result = await chrome.runtime.sendMessage({ action: 'applyChanges' });
-  if (result.error) {
-    alert('Error: ' + result.error);
-  } else {
-    window.close();
-  }
+// Tab navigation
+document.getElementById('tabs-nav').addEventListener('click', (e) => {
+  const btn = e.target.closest('.tab-btn');
+  if (!btn) return;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentView = btn.dataset.view;
+  renderTabs();
 });
 
-document.getElementById('cancel-btn').addEventListener('click', () => {
-  window.close();
-});
-
-document.getElementById('close-duplicates-btn').addEventListener('click', async () => {
-  const btn = document.getElementById('close-duplicates-btn');
+// Close duplicates
+document.getElementById('btn-dupes').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-dupes');
   btn.disabled = true;
   btn.textContent = 'Finding...';
 
-  // Group tabs by URL
   const urlToTabs = {};
   for (const tab of allTabs) {
     if (!urlToTabs[tab.url]) urlToTabs[tab.url] = [];
     urlToTabs[tab.url].push(tab);
   }
 
-  // Find duplicates (keep first, close rest) + new tabs
   const toClose = [];
   const newTabUrls = ['edge://newtab/', 'chrome://newtab/', 'about:newtab', 'about:blank'];
   for (const [url, tabs] of Object.entries(urlToTabs)) {
@@ -212,19 +226,87 @@ document.getElementById('close-duplicates-btn').addEventListener('click', async 
   }
 
   if (toClose.length === 0) {
-    btn.textContent = 'None found';
-    setTimeout(() => { btn.textContent = 'Close Duplicates & New Tabs'; btn.disabled = false; }, 1500);
+    showToast('No duplicates found');
+    btn.textContent = 'Close Duplicates';
+    btn.disabled = false;
     return;
   }
 
-  btn.textContent = `Closing ${toClose.length}...`;
   await chrome.tabs.remove(toClose);
+  allTabs = allTabs.filter(t => !toClose.includes(t.id));
+  renderStats();
+  updateTabCounts();
+  renderTabs();
+  showToast(`Closed ${toClose.length} duplicate tabs`);
+  btn.textContent = 'Close Duplicates';
+  btn.disabled = false;
+});
 
+// Suspend stale tabs
+document.getElementById('btn-suspend-stale').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-suspend-stale');
+  if (staleData.length === 0) {
+    showToast('No stale tabs to suspend');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Suspending...';
+
+  const tabIds = staleData.map(t => t.id);
+  // Send suspend command to background
+  const result = await new Promise(resolve => {
+    chrome.runtime.sendMessage({ action: 'suspendStaleTabs', tabIds }, resolve);
+  });
+
+  showToast(result?.error || `Suspended ${result?.suspended || 0} tabs`);
   // Refresh
   allTabs = await chrome.runtime.sendMessage({ action: 'getTabs' });
-  render();
-  btn.textContent = `Closed ${toClose.length}!`;
-  setTimeout(() => { btn.textContent = 'Close Duplicates & New Tabs'; btn.disabled = false; }, 1500);
+  await loadExtendedData();
+  renderStats();
+  renderTabs();
+  btn.textContent = 'Suspend Stale';
+  btn.disabled = false;
 });
+
+// Refresh
+document.getElementById('btn-refresh').addEventListener('click', async () => {
+  document.getElementById('tab-list').innerHTML = '<div class="loading"><div class="spinner"></div>Refreshing...</div>';
+  allTabs = await chrome.runtime.sendMessage({ action: 'getTabs' });
+  renderStats();
+  renderTabs();
+  await loadExtendedData();
+  showToast('Refreshed');
+});
+
+// Apply pending changes
+document.getElementById('apply-btn').addEventListener('click', async () => {
+  const result = await chrome.runtime.sendMessage({ action: 'applyChanges' });
+  if (result?.error) {
+    showToast('Error: ' + result.error);
+  } else {
+    pendingChanges = null;
+    renderPending();
+    allTabs = await chrome.runtime.sendMessage({ action: 'getTabs' });
+    renderStats();
+    renderTabs();
+    showToast('Changes applied');
+  }
+});
+
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2000);
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function getDomain(url) {
+  try { return new URL(url).hostname; } catch { return url || ''; }
+}
 
 init();
