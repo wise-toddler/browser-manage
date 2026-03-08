@@ -64,10 +64,28 @@ async function loadExtendedData() {
     // Re-render if on a filtered view
     if (currentView !== 'all') renderTabs();
 
-    // Update stats
+    // Update stale stat
     document.getElementById('stat-stale').textContent = staleData.length;
     if (staleData.length > 3) {
       document.getElementById('stat-stale').closest('.stat-card').classList.add('warn');
+    }
+
+    // Fetch memory data (slow — runs after UI is ready)
+    memoryData = await chrome.runtime.sendMessage({ action: 'getTabsWithMemory' });
+    if (memoryData && memoryData.total_memory_gb) {
+      const memEl = document.getElementById('stat-memory');
+      memEl.textContent = memoryData.total_memory_gb + 'G';
+      if (memoryData.total_memory_gb > 2) memEl.closest('.stat-card').classList.add('warn');
+      if (memoryData.total_memory_gb > 4) memEl.closest('.stat-card').classList.add('danger');
+      // Update hog count in tab nav
+      const hogs = (memoryData.tabs || []).filter(t => t.hog);
+      const counts = { hogs: hogs.length };
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        if (btn.dataset.view === 'hogs') {
+          const countEl = btn.querySelector('.count');
+          if (countEl) countEl.textContent = hogs.length;
+        }
+      });
     }
   } catch (e) {
     console.log('Extended data load error:', e);
@@ -90,7 +108,7 @@ function renderStats() {
   // Count unique groups
   const groups = new Set(allTabs.filter(t => t.groupId && t.groupId !== -1).map(t => t.groupId));
   document.getElementById('stat-groups').textContent = groups.size;
-  document.getElementById('stat-memory').textContent = '-';
+  document.getElementById('stat-memory').textContent = '...';
   document.getElementById('stat-stale').textContent = '-';
 }
 
@@ -113,11 +131,13 @@ function renderTabs() {
 
   switch (currentView) {
     case 'hogs':
-      // Show tabs sorted by a heuristic (grouped tabs with known heavy patterns)
-      tabs = allTabs.filter(t => {
+      if (memoryData && memoryData.tabs) {
+        tabs = memoryData.tabs.filter(t => t.hog);
+      } else {
+        // Fallback before memory loads: match known heavy URL patterns
         const patterns = ['console.cloud.google.com', 'bigquery', 'figma.com', 'sentry.io', 'datadoghq.com', 'colab.research', 'vscode.dev', 'github.dev'];
-        return patterns.some(p => t.url.includes(p));
-      });
+        tabs = allTabs.filter(t => patterns.some(p => t.url.includes(p)));
+      }
       break;
     case 'stale':
       tabs = staleData;
@@ -136,6 +156,12 @@ function renderTabs() {
 
   listEl.innerHTML = tabs.map(t => {
     const badges = [];
+    // Memory badge from memoryData
+    const memTab = memoryData?.tabs?.find(m => m.id === t.id);
+    if (memTab && memTab.memory_mb > 0) {
+      const cls = memTab.hog ? 'badge-hog' : 'badge-memory';
+      badges.push(`<span class="badge ${cls}">${memTab.memory_mb}MB</span>`);
+    }
     if (staleData.find(s => s.id === t.id)) {
       const mins = staleData.find(s => s.id === t.id).idle_mins;
       badges.push(`<span class="badge badge-stale">${mins >= 60 ? Math.round(mins/60) + 'h' : mins + 'm'} idle</span>`);

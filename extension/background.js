@@ -466,6 +466,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'getTabs') {
     getTabs().then(sendResponse);
     return true;
+  } else if (message.action === 'getTabsWithMemory') {
+    getTabsWithMemory().then(sendResponse);
+    return true;
   } else if (message.action === 'suspendStaleTabs') {
     suspendTabs(message.tabIds).then(sendResponse);
     return true;
