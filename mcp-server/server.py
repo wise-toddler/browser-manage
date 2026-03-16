@@ -6,6 +6,7 @@ import subprocess
 import asyncio
 import time
 import os
+import re
 from urllib.parse import urlparse
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -161,6 +162,124 @@ def _ext_result(result):
     if isinstance(result, dict) and "error" in result:
         return [TextContent(type="text", text=f"Error: {result['error']}. Is the extension running?")]
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+# --- Personalized cleanup patterns ---
+# Tabs matching these are always safe to suggest closing
+STALE_PATTERNS = [
+    'accounts.google.com',     # sign-in redirects
+    'edge://newtab', 'chrome://newtab', 'about:blank',  # new tabs
+    '/oauth/', '/signin/', '/callback',  # auth flows
+    'google.com/search', 'bing.com/search',  # search results
+]
+
+# One-time tabs: usually opened, used once, forgotten
+ONE_TIME_PATTERNS = [
+    'slack.com/files',         # slack file downloads
+    'mail.google.com',         # email opened in browser
+]
+
+# Domains to never suggest closing
+KEEP_DOMAINS = [
+    'notion.so',               # docs/TRDs — ask first
+    'console.cloud.google.com',  # GCP — ask first
+]
+
+
+def check_pr_status(url: str) -> str:
+    """Check if a GitHub PR is merged/closed/open via gh CLI."""
+    match = re.search(r'github\.com/([^/]+/[^/]+)/pull/(\d+)', url)
+    if not match:
+        return 'unknown'
+    repo, number = match.group(1), match.group(2)
+    try:
+        result = subprocess.run(
+            ['gh', 'pr', 'view', f'https://github.com/{repo}/pull/{number}',
+             '--json', 'state', '-q', '.state'],
+            capture_output=True, text=True, timeout=10
+        )
+        return result.stdout.strip().lower() or 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def categorize_tabs(tabs: list, check_prs: bool = True) -> dict:
+    """Categorize tabs into actionable groups."""
+    categories = {
+        'merged_prs': [],      # safe to close
+        'closed_prs': [],      # safe to close
+        'open_prs': [],        # keep
+        'signin_pages': [],    # safe to close
+        'new_tabs': [],        # safe to close
+        'one_time': [],        # suggest close
+        'search_results': [],  # suggest close
+        'suspended': [],       # info only
+        'grouped': [],         # skip
+        'duplicates': [],      # close extras
+        'keep': [],            # remaining
+    }
+
+    seen_urls = {}
+    for t in tabs:
+        url = t.get('url', '')
+        title = t.get('title', '')
+        is_grouped = t.get('groupId', -1) != -1
+
+        # Suspended
+        if 'chrome-extension://' in url and 'suspended' in url:
+            categories['suspended'].append(t)
+            continue
+
+        # Grouped tabs — skip
+        if is_grouped:
+            categories['grouped'].append(t)
+            continue
+
+        # GitHub PRs
+        if 'github.com' in url and '/pull/' in url:
+            if check_prs:
+                status = check_pr_status(url)
+                t['pr_status'] = status
+                if status == 'merged':
+                    categories['merged_prs'].append(t)
+                elif status == 'closed':
+                    categories['closed_prs'].append(t)
+                else:
+                    categories['open_prs'].append(t)
+            else:
+                categories['open_prs'].append(t)
+            continue
+
+        # Sign-in / auth pages
+        if 'accounts.google.com' in url or 'Sign In' in title or 'Sign in' in title or '/signin' in url or '/oauth/' in url:
+            categories['signin_pages'].append(t)
+            continue
+
+        # New tabs
+        if any(p in url for p in ['edge://newtab', 'chrome://newtab', 'about:blank']):
+            categories['new_tabs'].append(t)
+            continue
+
+        # Search results
+        if 'google.com/search' in url or 'bing.com/search' in url:
+            categories['search_results'].append(t)
+            continue
+
+        # One-time tabs
+        if any(p in url for p in ONE_TIME_PATTERNS):
+            categories['one_time'].append(t)
+            continue
+
+        # Duplicate detection
+        clean_url = url.split('?')[0].split('#')[0]
+        if clean_url in seen_urls:
+            categories['duplicates'].append(t)
+            continue
+        seen_urls[clean_url] = t
+
+        categories['keep'].append(t)
+
+    return categories
 
 
 @server.list_tools()
@@ -350,6 +469,29 @@ async def list_tools():
                 "required": ["query"]
             }
         ),
+        Tool(
+            name="browser_smart_cleanup",
+            description="Auto-categorize tabs: checks GitHub PR merge status, finds duplicates, sign-in pages, search results, one-time tabs. Returns categorized report with tab IDs ready for closing.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "check_prs": {"type": "boolean", "description": "Check GitHub PR statuses via gh CLI (slower but accurate)", "default": True},
+                    **PROFILE_PROP
+                }
+            }
+        ),
+        Tool(
+            name="browser_close_by_ids",
+            description="Close specific tabs by their Chrome tab IDs.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_ids": {"type": "array", "description": "List of tab IDs to close", "items": {"type": "integer"}},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_ids"]
+            }
+        ),
     ]
 
 
@@ -505,6 +647,38 @@ async def call_tool(name: str, arguments: dict):
                         t['profile'] = f"{p['browser']}-{p['profile']}"
                         all_results.append(t)
         return [TextContent(type="text", text=json.dumps(all_results, indent=2))]
+
+    elif name == "browser_smart_cleanup":
+        check_prs = arguments.get("check_prs", True)
+        tabs = send_extension_command("getTabs", {}, profile=profile)
+        if isinstance(tabs, dict) and "error" in tabs:
+            return [TextContent(type="text", text=f"Error: {tabs['error']}")]
+        cats = categorize_tabs(tabs, check_prs=check_prs)
+        # Build summary with IDs for easy closing
+        safe_to_close = []
+        report = {"total": len(tabs)}
+        for cat in ['merged_prs', 'closed_prs', 'signin_pages', 'new_tabs', 'search_results', 'one_time', 'duplicates']:
+            items = cats[cat]
+            if items:
+                report[cat] = [{"id": t["id"], "title": t.get("title", "")[:60], "url": t.get("url", "")[:80]} for t in items]
+                safe_to_close.extend([t["id"] for t in items])
+        report["safe_to_close_ids"] = safe_to_close
+        report["safe_to_close_count"] = len(safe_to_close)
+        # Info sections
+        for cat in ['open_prs', 'suspended', 'grouped', 'keep']:
+            items = cats[cat]
+            if items:
+                report[f"{cat}_count"] = len(items)
+        return [TextContent(type="text", text=json.dumps(report, indent=2))]
+
+    elif name == "browser_close_by_ids":
+        tab_ids = arguments.get("tab_ids", [])
+        if not tab_ids:
+            return [TextContent(type="text", text="No tab IDs provided")]
+        result = send_extension_command("closeTabs", {"tabIds": tab_ids}, profile=profile)
+        if isinstance(result, dict) and "error" in result:
+            return [TextContent(type="text", text=f"Error: {result['error']}")]
+        return [TextContent(type="text", text=f"Closed {len(tab_ids)} tabs")]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
