@@ -92,11 +92,32 @@ browser-manage/
 - [x] Cross-browser tab search
 - [x] Unified tab view across browsers
 
+### v1.5 - Metrics & Learning
+Phase 1 — Data Collection (extension):
+- [ ] `domainBehavior` store: per-domain activations, freshOpens, survived, closed, bursts
+- [ ] Enhanced `onCreated`: track openerTabId, cache domain, increment freshOpens, burst detection
+- [ ] Enhanced `onActivated`: increment activations, track focus time (totalFocusMs)
+- [ ] Enhanced `onRemoved`: use cached domain for cleanup
+- [ ] Burst detection: 5+ tabs from same domain in 30s = research burst
+- [ ] New handlers: `getDomainBehavior`, `getTabTracking`, `recordCleanupResult`
+
+Phase 2 — Smart Decisions (server):
+- [ ] `compute_activation_ratio()`: disposable (freshOpen heavy) vs sticky (activation heavy)
+- [ ] `compute_survival_rate()`: replaces hardcoded STALE_PATTERNS/KEEP_DOMAINS over time
+- [ ] 30-day "no" override: kept but never activated for 30d → nudge anyway
+- [ ] Frozen group detection: group tabs (misc/reading list) with 0 activations for 30d
+- [ ] Tab temperature labels: hot/warm/cold/frozen on all tab listings
+- [ ] Navigation source scoring: orphaned tabs, notification-spawned tabs
+- [ ] `browser_record_cleanup` tool: feedback loop for survival tracking
+- [ ] `browser_get_domain_insights` tool: inspect learned behavior
+
+Phase 3 — UI:
+- [ ] Temperature badges in popup (hot=red, warm=orange, cold=blue, frozen=grey)
+
 ### Future Ideas
 - Tab search by content (not just title/URL)
 - Sync tab groups across devices
 - Integration with bookmark manager
-- AI-powered tab categorization
 
 ## Skill Maintenance
 
