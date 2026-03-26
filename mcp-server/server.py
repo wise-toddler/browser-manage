@@ -356,8 +356,8 @@ def categorize_tabs(tabs: list, check_prs: bool = True) -> dict:
         title = t.get('title', '')
         is_grouped = t.get('groupId', -1) != -1
 
-        # Suspended
-        if 'chrome-extension://' in url and 'suspended' in url:
+        # Suspended (chrome-extension:// on Chrome, extension:// on Edge)
+        if ('chrome-extension://' in url or 'extension://' in url) and 'suspended' in url:
             categories['suspended'].append(t)
             continue
 

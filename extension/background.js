@@ -31,8 +31,8 @@ function checkMemoryHog(url) {
 
 // --- Tab suspension (built-in, no external dependency) ---
 const OWN_SUSPEND_PREFIX = chrome.runtime.getURL('suspended.html');
-// Also detect Great Suspender suspended tabs for backward compat
-const EXTERNAL_SUSPENDED_PATTERN = /^chrome-extension:\/\/[a-z]+\/suspended\.html/;
+// Detect any suspended tab: our own, Great Suspender (chrome-extension:// or extension://)
+const EXTERNAL_SUSPENDED_PATTERN = /^(?:chrome-extension|extension):\/\/[a-z]+\/suspended\.html/;
 
 function isSuspendedTab(url) {
   return url.startsWith(OWN_SUSPEND_PREFIX) || EXTERNAL_SUSPENDED_PATTERN.test(url);
