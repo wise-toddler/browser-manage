@@ -9,7 +9,6 @@
     "nativeMessaging",
     "debugger",
     "storage",
-    "management",
     "alarms"
   ],
   "background": {

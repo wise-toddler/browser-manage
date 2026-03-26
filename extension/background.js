@@ -29,36 +29,13 @@ function checkMemoryHog(url) {
   return { hog: false, reason: null };
 }
 
-// --- Great Suspender integration (auto-detect extension ID) ---
-const SUSPENDED_URL_PATTERN = /^chrome-extension:\/\/[a-z]+\/suspended\.html/;
-let suspenderExtId = null;
+// --- Tab suspension (built-in, no external dependency) ---
+const OWN_SUSPEND_PREFIX = chrome.runtime.getURL('suspended.html');
+// Also detect Great Suspender suspended tabs for backward compat
+const EXTERNAL_SUSPENDED_PATTERN = /^chrome-extension:\/\/[a-z]+\/suspended\.html/;
 
 function isSuspendedTab(url) {
-  return SUSPENDED_URL_PATTERN.test(url);
-}
-
-// Auto-detect suspender extension ID from installed extensions or existing tabs
-async function getSuspenderPrefix() {
-  if (suspenderExtId) return `chrome-extension://${suspenderExtId}/suspended.html`;
-  // Scan installed extensions for anything with "suspend" in the name
-  try {
-    const exts = await chrome.management.getAll();
-    for (const ext of exts) {
-      if (ext.enabled && ext.type === 'extension' && /suspend/i.test(ext.name)) {
-        suspenderExtId = ext.id;
-        return `chrome-extension://${suspenderExtId}/suspended.html`;
-      }
-    }
-  } catch {}
-  // Fallback: check existing tabs for a suspended URL
-  const tabs = await chrome.tabs.query({});
-  for (const t of tabs) {
-    if (SUSPENDED_URL_PATTERN.test(t.url)) {
-      suspenderExtId = t.url.split('/')[2];
-      return `chrome-extension://${suspenderExtId}/suspended.html`;
-    }
-  }
-  return null;
+  return url.startsWith(OWN_SUSPEND_PREFIX) || EXTERNAL_SUSPENDED_PATTERN.test(url);
 }
 
 function parseSuspendedUrl(url) {
@@ -76,8 +53,6 @@ async function listSuspendedTabs() {
 }
 
 async function suspendTabs(tabIds) {
-  const prefix = await getSuspenderPrefix();
-  if (!prefix) return { error: 'Great Suspender extension not found' };
   const tabs = await getTabs();
   const whitelist = await getWhitelist();
   const results = { suspended: 0, skipped_whitelisted: 0, skipped_already: 0 };
@@ -91,7 +66,7 @@ async function suspendTabs(tabIds) {
       const domain = new URL(tab.url).hostname.replace('www.', '');
       if (whitelist.some(d => domain.includes(d))) { results.skipped_whitelisted++; continue; }
     } catch {}
-    const suspendUrl = `${prefix}#ttl=${encodeURIComponent(tab.title)}&uri=${encodeURIComponent(tab.url)}`;
+    const suspendUrl = `${OWN_SUSPEND_PREFIX}#ttl=${encodeURIComponent(tab.title)}&uri=${encodeURIComponent(tab.url)}`;
     await chrome.tabs.update(tabId, { url: suspendUrl });
     results.suspended++;
   }
