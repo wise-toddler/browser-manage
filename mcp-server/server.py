@@ -7,6 +7,7 @@ import asyncio
 import time
 import os
 import re
+import math
 from urllib.parse import urlparse
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -201,6 +202,136 @@ def check_pr_status(url: str) -> str:
         return result.stdout.strip().lower() or 'unknown'
     except Exception:
         return 'unknown'
+
+
+# --- Data-driven prediction (nearest-centroid classifier) ---
+NUMERIC_FEATURES = [
+    'ageMinutes', 'idleMinutes', 'activationCount', 'avgGapMinutes',
+    'maxGapMinutes', 'totalFocusMs', 'avgFocusPerVisit', 'sessionCount',
+    'domainTabCount', 'redirectCount', 'domainKeptRate', 'domainAvgLifespan',
+    'domainTotalDecisions', 'hasOpener', 'isDuplicate', 'isGrouped',
+]
+
+
+def compute_centroid(decisions: list, feature_keys: list) -> dict:
+    """Compute average feature vector from decisions."""
+    if not decisions:
+        return {k: 0.0 for k in feature_keys}
+    centroid = {k: 0.0 for k in feature_keys}
+    for d in decisions:
+        feats = d.get('features', {})
+        for k in feature_keys:
+            val = feats.get(k, 0)
+            if isinstance(val, bool):
+                val = 1 if val else 0
+            centroid[k] += float(val) if val else 0.0
+    n = len(decisions)
+    return {k: centroid[k] / n for k in feature_keys}
+
+
+def compute_std(decisions: list, feature_keys: list, centroid: dict) -> dict:
+    """Compute per-feature standard deviation."""
+    if len(decisions) < 2:
+        return {k: 1.0 for k in feature_keys}
+    variance = {k: 0.0 for k in feature_keys}
+    for d in decisions:
+        feats = d.get('features', {})
+        for k in feature_keys:
+            val = feats.get(k, 0)
+            if isinstance(val, bool):
+                val = 1 if val else 0
+            diff = (float(val) if val else 0.0) - centroid[k]
+            variance[k] += diff * diff
+    n = len(decisions)
+    return {k: math.sqrt(variance[k] / n) or 1.0 for k in feature_keys}
+
+
+def euclidean_distance(vec: dict, centroid: dict, feature_keys: list) -> float:
+    """Euclidean distance between feature vector and centroid."""
+    total = 0.0
+    for k in feature_keys:
+        val = vec.get(k, 0)
+        if isinstance(val, bool):
+            val = 1 if val else 0
+        diff = (float(val) if val else 0.0) - centroid.get(k, 0)
+        total += diff * diff
+    return math.sqrt(total)
+
+
+def predict_dispose_probability(features: dict, decision_log: list, domain_stats: dict) -> dict:
+    """Nearest-centroid classifier for tab dispose probability."""
+    # Enrich with domain historical data
+    domain = features.get('domain', '')
+    ds = domain_stats.get(domain, {})
+    total_d = ds.get('totalClosed', 0) + ds.get('totalKept', 0)
+    features['domainKeptRate'] = ds.get('totalKept', 0) / max(total_d, 1)
+    features['domainAvgLifespan'] = ds.get('avgLifespanMinutes', 0)
+    features['domainTotalDecisions'] = total_d
+    # Bool to numeric
+    for k in ['hasOpener', 'isDuplicate', 'isGrouped']:
+        features[k] = 1 if features.get(k) else 0
+
+    closed = [d for d in decision_log if d.get('outcome') == 'closed']
+    kept = [d for d in decision_log if d.get('outcome') == 'kept']
+    total = len(closed) + len(kept)
+
+    if total < 30:
+        return {'probability': None, 'confidence': 'cold_start', 'total_decisions': total}
+
+    closed_centroid = compute_centroid(closed, NUMERIC_FEATURES)
+    kept_centroid = compute_centroid(kept, NUMERIC_FEATURES)
+    dist_closed = euclidean_distance(features, closed_centroid, NUMERIC_FEATURES)
+    dist_kept = euclidean_distance(features, kept_centroid, NUMERIC_FEATURES)
+    denom = dist_closed + dist_kept
+    probability = dist_kept / denom if denom > 0 else 0.5
+
+    # Feature importance
+    overall_centroid = compute_centroid(decision_log, NUMERIC_FEATURES)
+    std = compute_std(decision_log, NUMERIC_FEATURES, overall_centroid)
+    importance = {}
+    for k in NUMERIC_FEATURES:
+        diff = abs(kept_centroid.get(k, 0) - closed_centroid.get(k, 0))
+        importance[k] = round(diff / std.get(k, 1.0), 2)
+    top_features = dict(sorted(importance.items(), key=lambda x: -x[1])[:5])
+
+    return {
+        'probability': round(probability, 3),
+        'confidence': 'low' if total < 100 else 'high',
+        'total_decisions': total,
+        'top_features': top_features,
+    }
+
+
+def extract_features_server_side(tab: dict, tracking: dict, all_tracking: dict) -> dict:
+    """Extract features from tab + tracking data on server side."""
+    now = time.time() * 1000
+    created = tracking.get('createdAt', now)
+    last_visited = tracking.get('lastVisitedAt', now)
+    domain = tracking.get('domain', '')
+    domain_count = sum(1 for t in all_tracking.values() if isinstance(t, dict) and t.get('domain') == domain) if domain else 1
+    ts = tracking.get('activationTimestamps', [])
+    gaps = [ts[i] - ts[i-1] for i in range(1, len(ts))] if len(ts) > 1 else []
+    avg_gap = (sum(gaps) / len(gaps) / 60000) if gaps else 0
+    max_gap = (max(gaps) / 60000) if gaps else 0
+    total_focus = tracking.get('totalFocusMs', 0)
+    act_count = tracking.get('activationCount', 0)
+    return {
+        'ageMinutes': round((now - created) / 60000, 1),
+        'idleMinutes': round((now - last_visited) / 60000, 1),
+        'activationCount': act_count,
+        'avgGapMinutes': round(avg_gap, 1),
+        'maxGapMinutes': round(max_gap, 1),
+        'totalFocusMs': round(total_focus),
+        'avgFocusPerVisit': round(total_focus / act_count) if act_count > 0 else 0,
+        'sessionCount': tracking.get('sessionCount', 1),
+        'hasOpener': tracking.get('openerTabId') is not None,
+        'openerDomain': tracking.get('openerDomain', ''),
+        'domainTabCount': domain_count,
+        'isDuplicate': domain_count > 1,
+        'redirectCount': tracking.get('redirectCount', 0),
+        'isGrouped': tab.get('groupId', -1) != -1,
+        'domain': domain,
+    }
 
 
 def categorize_tabs(tabs: list, check_prs: bool = True) -> dict:
@@ -492,6 +623,34 @@ async def list_tools():
                 "required": ["tab_ids"]
             }
         ),
+        # v1.5 - Metrics & Learning
+        Tool(
+            name="browser_get_decision_log",
+            description="Get raw decision log (last 500 tab close/keep decisions with features).",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
+        Tool(
+            name="browser_get_domain_stats",
+            description="Get per-domain aggregates: close rate, avg lifespan, avg activations.",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
+        Tool(
+            name="browser_record_cleanup",
+            description="Record cleanup results for learning. Call AFTER closing tabs to train the model.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "kept": {"type": "array", "description": "Tabs that survived: [{tabId, domain}]", "items": {"type": "object"}},
+                    "closed": {"type": "array", "description": "Tabs that were closed: [{tabId, domain}]", "items": {"type": "object"}},
+                    **PROFILE_PROP
+                }
+            }
+        ),
+        Tool(
+            name="browser_get_predictions",
+            description="Get dispose probability for all current tabs. Shows which tabs the model predicts you'll close.",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
     ]
 
 
@@ -653,6 +812,13 @@ async def call_tool(name: str, arguments: dict):
         tabs = send_extension_command("getTabs", {}, profile=profile)
         if isinstance(tabs, dict) and "error" in tabs:
             return [TextContent(type="text", text=f"Error: {tabs['error']}")]
+        # Fetch learning data
+        decision_log = send_extension_command("getDecisionLog", {}, profile=profile)
+        domain_stats = send_extension_command("getDomainStats", {}, profile=profile)
+        tab_tracking = send_extension_command("getTabTracking", {}, profile=profile)
+        if not isinstance(decision_log, list): decision_log = []
+        if not isinstance(domain_stats, dict) or "error" in domain_stats: domain_stats = {}
+        if not isinstance(tab_tracking, dict) or "error" in tab_tracking: tab_tracking = {}
         cats = categorize_tabs(tabs, check_prs=check_prs)
         # Build summary with IDs for easy closing
         safe_to_close = []
@@ -669,6 +835,28 @@ async def call_tool(name: str, arguments: dict):
             items = cats[cat]
             if items:
                 report[f"{cat}_count"] = len(items)
+        # Add predictions for kept tabs
+        if decision_log:
+            predictions = []
+            for t in cats.get('keep', []):
+                tid = str(t.get('id'))
+                tracking = tab_tracking.get(tid, {})
+                features = extract_features_server_side(t, tracking, tab_tracking)
+                pred = predict_dispose_probability(features, decision_log, domain_stats)
+                if pred.get('probability') is not None:
+                    predictions.append({
+                        'id': t['id'], 'title': t.get('title', '')[:60],
+                        'domain': features.get('domain', ''),
+                        'dispose_probability': pred['probability'],
+                        'confidence': pred['confidence'],
+                    })
+            if predictions:
+                predictions.sort(key=lambda x: x['dispose_probability'], reverse=True)
+                report['predicted_disposable'] = [p for p in predictions if p['dispose_probability'] > 0.6]
+                report['prediction_stats'] = {
+                    'total_decisions': len(decision_log),
+                    'confidence': 'cold_start' if len(decision_log) < 30 else ('low' if len(decision_log) < 100 else 'high'),
+                }
         return [TextContent(type="text", text=json.dumps(report, indent=2))]
 
     elif name == "browser_close_by_ids":
@@ -679,6 +867,50 @@ async def call_tool(name: str, arguments: dict):
         if isinstance(result, dict) and "error" in result:
             return [TextContent(type="text", text=f"Error: {result['error']}")]
         return [TextContent(type="text", text=f"Closed {len(tab_ids)} tabs")]
+
+    # v1.5 - Metrics & Learning
+    elif name == "browser_get_decision_log":
+        return _ext_result(send_extension_command("getDecisionLog", {}, profile=profile))
+
+    elif name == "browser_get_domain_stats":
+        return _ext_result(send_extension_command("getDomainStats", {}, profile=profile))
+
+    elif name == "browser_record_cleanup":
+        kept = arguments.get("kept", [])
+        closed = arguments.get("closed", [])
+        result = send_extension_command("recordCleanupResult", {"kept": kept, "closed": closed}, profile=profile)
+        return _ext_result(result)
+
+    elif name == "browser_get_predictions":
+        tabs = send_extension_command("getTabs", {}, profile=profile)
+        if isinstance(tabs, dict) and "error" in tabs:
+            return [TextContent(type="text", text=f"Error: {tabs['error']}")]
+        decision_log = send_extension_command("getDecisionLog", {}, profile=profile)
+        domain_stats = send_extension_command("getDomainStats", {}, profile=profile)
+        tab_tracking = send_extension_command("getTabTracking", {}, profile=profile)
+        if not isinstance(decision_log, list):
+            decision_log = []
+        if not isinstance(domain_stats, dict) or "error" in domain_stats:
+            domain_stats = {}
+        if not isinstance(tab_tracking, dict) or "error" in tab_tracking:
+            tab_tracking = {}
+        predictions = []
+        for t in tabs:
+            tid = str(t.get('id'))
+            tracking = tab_tracking.get(tid, {})
+            features = extract_features_server_side(t, tracking, tab_tracking)
+            pred = predict_dispose_probability(features, decision_log, domain_stats)
+            predictions.append({
+                'id': t['id'],
+                'title': t.get('title', '')[:60],
+                'domain': features.get('domain', ''),
+                'dispose_probability': pred.get('probability'),
+                'confidence': pred.get('confidence'),
+                'total_decisions': pred.get('total_decisions'),
+                'top_features': pred.get('top_features'),
+            })
+        predictions.sort(key=lambda x: x.get('dispose_probability') or 0, reverse=True)
+        return [TextContent(type="text", text=json.dumps(predictions, indent=2))]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

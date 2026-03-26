@@ -9,7 +9,8 @@
     "nativeMessaging",
     "debugger",
     "storage",
-    "management"
+    "management",
+    "alarms"
   ],
   "background": {
     "service_worker": "background.js"

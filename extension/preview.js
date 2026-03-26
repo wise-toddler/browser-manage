@@ -3,6 +3,7 @@ let memoryData = null;
 let staleData = [];
 let suspendedData = [];
 let pendingChanges = null;
+let tabTrackingData = {};
 let currentView = 'all';
 
 const STALE_THRESHOLD_HOURS = 2;
@@ -41,6 +42,7 @@ async function loadExtendedData() {
     // Get tab tracking data from storage
     const storage = await chrome.storage.local.get('tabTracking');
     const tracking = storage.tabTracking || {};
+    tabTrackingData = tracking;
     const now = Date.now();
     const threshold = STALE_THRESHOLD_HOURS * 3600000;
 
@@ -156,6 +158,17 @@ function renderTabs() {
 
   listEl.innerHTML = tabs.map(t => {
     const badges = [];
+    // Temperature badge from tracking data
+    const tr = tabTrackingData[t.id];
+    if (tr && tr.lastVisitedAt) {
+      const idleMins = (Date.now() - tr.lastVisitedAt) / 60000;
+      let temp, tempClass;
+      if (idleMins > 10080) { temp = 'frozen'; tempClass = 'badge-frozen'; }
+      else if (idleMins > 1440) { temp = 'cold'; tempClass = 'badge-cold'; }
+      else if (idleMins > 120) { temp = 'warm'; tempClass = 'badge-warm'; }
+      else { temp = 'hot'; tempClass = 'badge-hot'; }
+      badges.push(`<span class="badge ${tempClass}">${temp}</span>`);
+    }
     // Memory badge from memoryData
     const memTab = memoryData?.tabs?.find(m => m.id === t.id);
     if (memTab && memTab.memory_mb > 0) {
