@@ -116,9 +116,28 @@ function getDomainFromUrl(url) {
   try { return new URL(url).hostname.replace('www.', ''); } catch { return ''; }
 }
 
+// Resolve domain for suspended tabs by extracting original URL
+function resolveTrackingDomain(url) {
+  if (isSuspendedTab(url)) {
+    const parsed = parseSuspendedUrl(url);
+    if (parsed.originalUrl) return getDomainFromUrl(parsed.originalUrl);
+  }
+  return getDomainFromUrl(url);
+}
+
+// Skip internal/noise pages from decision logging
+function isTrackableDomain(domain) {
+  if (!domain) return false;
+  if (domain === 'newtab' || domain === 'extensions') return false;
+  // Extension IDs (32-char lowercase alpha strings)
+  if (/^[a-z]{32}$/.test(domain)) return false;
+  return true;
+}
+
 function newTrackingEntry(tab) {
   const now = Date.now();
-  const domain = getDomainFromUrl(tab.pendingUrl || tab.url || '');
+  const url = tab.pendingUrl || tab.url || '';
+  const domain = isSuspendedTab(url) ? resolveTrackingDomain(url) : getDomainFromUrl(url);
   const openerDomain = tab.openerTabId ? (tabTracking[tab.openerTabId]?.domain || '') : '';
   return {
     createdAt: now, lastVisitedAt: now,
@@ -184,7 +203,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   const entry = tabTracking[tabId];
-  if (entry && entry.domain) {
+  if (entry && isTrackableDomain(entry.domain)) {
     const features = extractFeatures(tabId);
     const source = extensionClosing.has(tabId) ? 'extension' : 'manual';
     extensionClosing.delete(tabId);

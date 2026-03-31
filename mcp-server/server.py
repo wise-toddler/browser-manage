@@ -308,6 +308,21 @@ def extract_features_server_side(tab: dict, tracking: dict, all_tracking: dict) 
     created = tracking.get('createdAt', now)
     last_visited = tracking.get('lastVisitedAt', now)
     domain = tracking.get('domain', '')
+    # Fallback: extract domain from tab URL if tracking has none
+    if not domain:
+        tab_url = tab.get('url', '')
+        # Resolve suspended tab URLs to original domain
+        if 'suspended' in tab_url and ('chrome-extension://' in tab_url or 'extension://' in tab_url):
+            frag = tab_url.split('#', 1)[1] if '#' in tab_url else ''
+            params = dict(p.split('=', 1) for p in frag.split('&') if '=' in p)
+            orig = params.get('uri', params.get('url', ''))
+            if orig:
+                from urllib.parse import unquote
+                domain = urlparse(unquote(orig)).hostname or ''
+                domain = domain.replace('www.', '')
+        if not domain and tab_url:
+            domain = urlparse(tab_url).hostname or ''
+            domain = domain.replace('www.', '')
     domain_count = sum(1 for t in all_tracking.values() if isinstance(t, dict) and t.get('domain') == domain) if domain else 1
     ts = tracking.get('activationTimestamps', [])
     gaps = [ts[i] - ts[i-1] for i in range(1, len(ts))] if len(ts) > 1 else []
