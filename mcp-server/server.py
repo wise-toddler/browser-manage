@@ -313,8 +313,8 @@ def extract_features_server_side(tab: dict, tracking: dict, all_tracking: dict) 
     gaps = [ts[i] - ts[i-1] for i in range(1, len(ts))] if len(ts) > 1 else []
     avg_gap = (sum(gaps) / len(gaps) / 60000) if gaps else 0
     max_gap = (max(gaps) / 60000) if gaps else 0
-    total_focus = tracking.get('totalFocusMs', 0)
-    act_count = tracking.get('activationCount', 0)
+    total_focus = tracking.get('totalFocusMs') or 0
+    act_count = tracking.get('activationCount') or 0
     return {
         'ageMinutes': round((now - created) / 60000, 1),
         'idleMinutes': round((now - last_visited) / 60000, 1),
@@ -888,10 +888,17 @@ async def call_tool(name: str, arguments: dict):
         decision_log = send_extension_command("getDecisionLog", {}, profile=profile)
         domain_stats = send_extension_command("getDomainStats", {}, profile=profile)
         tab_tracking = send_extension_command("getTabTracking", {}, profile=profile)
+        # Unwrap {data: ...} wrapper from extension
+        if isinstance(decision_log, dict):
+            decision_log = decision_log.get('data', [])
         if not isinstance(decision_log, list):
             decision_log = []
+        if isinstance(domain_stats, dict) and 'data' in domain_stats:
+            domain_stats = domain_stats['data']
         if not isinstance(domain_stats, dict) or "error" in domain_stats:
             domain_stats = {}
+        if isinstance(tab_tracking, dict) and 'data' in tab_tracking:
+            tab_tracking = tab_tracking['data']
         if not isinstance(tab_tracking, dict) or "error" in tab_tracking:
             tab_tracking = {}
         predictions = []
