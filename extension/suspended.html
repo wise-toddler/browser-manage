@@ -30,9 +30,10 @@
     document.getElementById('title').textContent = title;
     document.getElementById('url').textContent = url;
     document.title = title;
-    // Restore on click
+    // Restore on click — send message to background to navigate this tab
     document.body.addEventListener('click', () => {
-      if (url) location.href = url;
+      if (!url) return;
+      chrome.runtime.sendMessage({ action: 'unsuspendCurrent', url: url });
     });
   </script>
 </body>
