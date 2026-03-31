@@ -768,16 +768,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.get('domainStats').then(d => sendResponse(d.domainStats || {}));
     return true;
   } else if (message.action === 'unsuspendCurrent') {
-    // Called from suspended.html when user clicks to restore
-    const tabId = sender.tab.id;
-    const tabWindowId = sender.tab.windowId;
-    chrome.tabs.update(tabId, { url: message.url });
-    // If in triage window, move back to main window
-    getTriageWindowId().then(triageWin => {
-      if (triageWin && tabWindowId === triageWin) {
-        restoreFromTriage([tabId]);
-      }
-    });
+    // Called from suspended.html — just navigate in place, stay in same window
+    chrome.tabs.update(sender.tab.id, { url: message.url });
     sendResponse({ ok: true });
   } else if (message.action === 'getTabTracking') {
     sendResponse(tabTracking);
