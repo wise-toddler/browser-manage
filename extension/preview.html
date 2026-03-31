@@ -26,7 +26,7 @@
     }
 
     /* Stats cards */
-    .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+    .stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 14px; }
     .stat-card {
       background: #1a1a2e; border-radius: 8px; padding: 10px; text-align: center;
       border: 1px solid #1e293b;
@@ -80,6 +80,9 @@
     .badge-warm { background: #5b4a21; color: #fbbf24; }
     .badge-cold { background: #1e3a5f; color: #60a5fa; }
     .badge-frozen { background: #2d2d44; color: #64748b; }
+    .badge-dispose { background: #5b2121; color: #fca5a5; font-variant-numeric: tabular-nums; }
+    .badge-safe { background: #1e3a2e; color: #6ee7b7; }
+    .badge-maybe { background: #4a3728; color: #fbbf24; }
 
     .btn-close-tab {
       background: none; border: none; color: #475569; cursor: pointer;
@@ -143,6 +146,7 @@
     <div class="stat-card"><div class="value" id="stat-memory">-</div><div class="label">Memory</div></div>
     <div class="stat-card"><div class="value" id="stat-stale">-</div><div class="label">Stale</div></div>
     <div class="stat-card"><div class="value" id="stat-groups">-</div><div class="label">Groups</div></div>
+    <div class="stat-card"><div class="value" id="stat-decisions">-</div><div class="label">Learned</div></div>
   </div>
 
   <div id="pending-banner" class="pending-banner" style="display:none">
@@ -160,6 +164,7 @@
     <button class="tab-btn active" data-view="all">All</button>
     <button class="tab-btn" data-view="hogs">Hogs</button>
     <button class="tab-btn" data-view="stale">Stale</button>
+    <button class="tab-btn" data-view="disposable">Dispose</button>
     <button class="tab-btn" data-view="suspended">Suspended</button>
   </div>
 

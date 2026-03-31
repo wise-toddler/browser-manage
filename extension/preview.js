@@ -2,8 +2,11 @@ let allTabs = [];
 let memoryData = null;
 let staleData = [];
 let suspendedData = [];
+let disposableData = [];
 let pendingChanges = null;
 let tabTrackingData = {};
+let decisionLog = [];
+let domainStats = {};
 let currentView = 'all';
 
 const STALE_THRESHOLD_HOURS = 2;
@@ -54,8 +57,20 @@ async function loadExtendedData() {
       return { ...t, idle_mins: Math.round((now - tr.lastVisitedAt) / 60000) };
     });
 
+    // Load decision log and domain stats
+    const dlStore = await chrome.storage.local.get('decisionLog');
+    decisionLog = dlStore.decisionLog || [];
+    const dsStore = await chrome.storage.local.get('domainStats');
+    domainStats = dsStore.domainStats || {};
+
+    // Compute dispose predictions per tab
+    disposableData = computeDisposable(allTabs, tracking, decisionLog, domainStats);
+
+    // Update learned stat
+    document.getElementById('stat-decisions').textContent = decisionLog.length;
+
     // Detect suspended tabs
-    const suspendPattern = /^chrome-extension:\/\/[a-z]+\/suspended\.html/;
+    const suspendPattern = /^(?:chrome-extension|extension):\/\/[a-z]+\/suspended\.html/;
     suspendedData = allTabs.filter(t => suspendPattern.test(t.url)).map(t => {
       const hash = t.url.split('#')[1] || '';
       const params = new URLSearchParams(hash);
@@ -94,8 +109,68 @@ async function loadExtendedData() {
   }
 }
 
+function computeDisposable(tabs, tracking, log, stats) {
+  const closed = log.filter(d => d.outcome === 'closed');
+  const kept = log.filter(d => d.outcome === 'kept');
+  if (closed.length < 10 || kept.length < 5) return [];
+
+  // Compute centroids for numeric features
+  const featureKeys = ['ageMinutes','idleMinutes','activationCount','avgGapMinutes','maxGapMinutes','totalFocusMs','avgFocusPerVisit','sessionCount','domainTabCount','redirectCount'];
+  const centroid = (decisions) => {
+    const c = {};
+    for (const k of featureKeys) c[k] = 0;
+    for (const d of decisions) for (const k of featureKeys) c[k] += (d.features?.[k] || 0);
+    const n = decisions.length || 1;
+    for (const k of featureKeys) c[k] /= n;
+    return c;
+  };
+  const dist = (a, b) => Math.sqrt(featureKeys.reduce((s, k) => s + (a[k] - b[k]) ** 2, 0));
+
+  const closedC = centroid(closed);
+  const keptC = centroid(kept);
+  const now = Date.now();
+  const results = [];
+
+  for (const t of tabs) {
+    const tr = tracking[t.id];
+    if (!tr) continue;
+    const totalFocus = tr.totalFocusMs || 0;
+    const actCount = tr.activationCount || 0;
+    const ts = tr.activationTimestamps || [];
+    let avgGap = 0, maxGap = 0;
+    if (ts.length > 1) {
+      const gaps = [];
+      for (let i = 1; i < ts.length; i++) gaps.push(ts[i] - ts[i-1]);
+      avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length / 60000;
+      maxGap = Math.max(...gaps) / 60000;
+    }
+    let domainCount = 0;
+    const domain = tr.domain || '';
+    for (const [, v] of Object.entries(tracking)) { if (v.domain === domain) domainCount++; }
+
+    const features = {
+      ageMinutes: (now - tr.createdAt) / 60000,
+      idleMinutes: (now - tr.lastVisitedAt) / 60000,
+      activationCount: actCount,
+      avgGapMinutes: avgGap,
+      maxGapMinutes: maxGap,
+      totalFocusMs: totalFocus,
+      avgFocusPerVisit: actCount > 0 ? totalFocus / actCount : 0,
+      sessionCount: tr.sessionCount || 1,
+      domainTabCount: domainCount,
+      redirectCount: tr.redirectCount || 0,
+    };
+
+    const dClose = dist(features, closedC);
+    const dKept = dist(features, keptC);
+    const prob = (dClose + dKept) > 0 ? dKept / (dClose + dKept) : 0.5;
+    results.push({ ...t, dispose_probability: prob, domain });
+  }
+  return results.filter(t => t.dispose_probability > 0.6).sort((a, b) => b.dispose_probability - a.dispose_probability);
+}
+
 function updateTabCounts() {
-  const counts = { all: allTabs.length, hogs: 0, stale: staleData.length, suspended: suspendedData.length };
+  const counts = { all: allTabs.length, hogs: 0, stale: staleData.length, disposable: disposableData.length, suspended: suspendedData.length };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const view = btn.dataset.view;
     const count = counts[view] || 0;
@@ -144,6 +219,9 @@ function renderTabs() {
     case 'stale':
       tabs = staleData;
       break;
+    case 'disposable':
+      tabs = disposableData;
+      break;
     case 'suspended':
       tabs = suspendedData;
       break;
@@ -168,6 +246,13 @@ function renderTabs() {
       else if (idleMins > 120) { temp = 'warm'; tempClass = 'badge-warm'; }
       else { temp = 'hot'; tempClass = 'badge-hot'; }
       badges.push(`<span class="badge ${tempClass}">${temp}</span>`);
+    }
+    // Dispose probability badge
+    const dispTab = disposableData.find(d => d.id === t.id);
+    if (dispTab) {
+      const pct = Math.round(dispTab.dispose_probability * 100);
+      const cls = pct > 80 ? 'badge-dispose' : pct > 60 ? 'badge-maybe' : 'badge-safe';
+      badges.push(`<span class="badge ${cls}">${pct}%</span>`);
     }
     // Memory badge from memoryData
     const memTab = memoryData?.tabs?.find(m => m.id === t.id);
