@@ -273,17 +273,6 @@ chrome.tabs.onCreated.addListener((tab) => {
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  // Auto-restore: if user activates a tab in triage window, move it back
-  const triageWin = await getTriageWindowId();
-  if (triageWin) {
-    try {
-      const tab = await chrome.tabs.get(activeInfo.tabId);
-      if (tab.windowId === triageWin) {
-        restoreFromTriage([activeInfo.tabId]);
-        return; // skip tracking for this activation
-      }
-    } catch {}
-  }
   const now = Date.now();
   // End focus for previous tab
   if (activeTabId && tabTracking[activeTabId]) {
@@ -780,7 +769,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === 'unsuspendCurrent') {
     // Called from suspended.html when user clicks to restore
-    chrome.tabs.update(sender.tab.id, { url: message.url });
+    const tabId = sender.tab.id;
+    const tabWindowId = sender.tab.windowId;
+    chrome.tabs.update(tabId, { url: message.url });
+    // If in triage window, move back to main window
+    getTriageWindowId().then(triageWin => {
+      if (triageWin && tabWindowId === triageWin) {
+        restoreFromTriage([tabId]);
+      }
+    });
     sendResponse({ ok: true });
   } else if (message.action === 'getTabTracking') {
     sendResponse(tabTracking);
