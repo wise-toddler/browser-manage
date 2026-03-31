@@ -666,6 +666,46 @@ async def list_tools():
             description="Get dispose probability for all current tabs. Shows which tabs the model predicts you'll close.",
             inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
         ),
+        Tool(
+            name="browser_triage_tabs",
+            description="Move tabs to triage window (suspend + move). User reviews them later to keep or close.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_ids": {"type": "array", "items": {"type": "integer"}, "description": "Tab IDs to triage"},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_ids"]
+            }
+        ),
+        Tool(
+            name="browser_restore_from_triage",
+            description="Move tabs back from triage window to main window.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_ids": {"type": "array", "items": {"type": "integer"}, "description": "Tab IDs to restore"},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_ids"]
+            }
+        ),
+        Tool(
+            name="browser_list_triage",
+            description="List all tabs in the triage window.",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
+        Tool(
+            name="browser_triage_disposable",
+            description="Auto-triage: move all tabs with dispose probability above threshold to triage window.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "threshold": {"type": "number", "description": "Dispose probability threshold (0-1). Default 0.8", "default": 0.8},
+                    **PROFILE_PROP
+                }
+            }
+        ),
     ]
 
 
@@ -933,6 +973,52 @@ async def call_tool(name: str, arguments: dict):
             })
         predictions.sort(key=lambda x: x.get('dispose_probability') or 0, reverse=True)
         return [TextContent(type="text", text=json.dumps(predictions, indent=2))]
+
+    elif name == "browser_triage_tabs":
+        tab_ids = arguments.get("tab_ids", [])
+        result = send_extension_command("triageTabs", {"tabIds": tab_ids}, profile=profile)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "browser_restore_from_triage":
+        tab_ids = arguments.get("tab_ids", [])
+        result = send_extension_command("restoreFromTriage", {"tabIds": tab_ids}, profile=profile)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "browser_list_triage":
+        result = send_extension_command("listTriageTabs", {}, profile=profile)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "browser_triage_disposable":
+        threshold = arguments.get("threshold", 0.8)
+        # Get predictions first
+        tabs = send_extension_command("getTabs", {}, profile=profile)
+        if isinstance(tabs, dict) and "error" in tabs:
+            return [TextContent(type="text", text=f"Error: {tabs['error']}")]
+        decision_log = send_extension_command("getDecisionLog", {}, profile=profile)
+        domain_stats = send_extension_command("getDomainStats", {}, profile=profile)
+        tab_tracking = send_extension_command("getTabTracking", {}, profile=profile)
+        if isinstance(decision_log, dict): decision_log = decision_log.get('data', [])
+        if not isinstance(decision_log, list): decision_log = []
+        if isinstance(domain_stats, dict) and 'data' in domain_stats: domain_stats = domain_stats['data']
+        if not isinstance(domain_stats, dict): domain_stats = {}
+        if isinstance(tab_tracking, dict) and 'data' in tab_tracking: tab_tracking = tab_tracking['data']
+        if not isinstance(tab_tracking, dict): tab_tracking = {}
+        # Find tabs above threshold
+        to_triage = []
+        for t in tabs:
+            tid = str(t.get('id'))
+            tracking = tab_tracking.get(tid, {})
+            features = extract_features_server_side(t, tracking, tab_tracking)
+            pred = predict_dispose_probability(features, decision_log, domain_stats)
+            prob = pred.get('probability')
+            if prob is not None and prob >= threshold and t.get('groupId', -1) == -1:
+                to_triage.append({'id': t['id'], 'title': t.get('title', '')[:60], 'probability': prob})
+        if not to_triage:
+            return [TextContent(type="text", text=json.dumps({"triaged": 0, "message": f"No ungrouped tabs above {threshold:.0%} threshold"}))]
+        tab_ids = [t['id'] for t in to_triage]
+        result = send_extension_command("triageTabs", {"tabIds": tab_ids}, profile=profile)
+        result['tabs'] = to_triage
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

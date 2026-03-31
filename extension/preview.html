@@ -83,6 +83,27 @@
     .badge-dispose { background: #5b2121; color: #fca5a5; font-variant-numeric: tabular-nums; }
     .badge-safe { background: #1e3a2e; color: #6ee7b7; }
     .badge-maybe { background: #4a3728; color: #fbbf24; }
+    .badge-triage { background: #3b1a4a; color: #c084fc; }
+
+    /* Toggle switch */
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; padding: 6px 10px; background: #1a1a2e; border-radius: 6px; font-size: 11px; color: #94a3b8; }
+    .toggle { position: relative; width: 32px; height: 18px; cursor: pointer; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider { position: absolute; inset: 0; background: #333; border-radius: 9px; transition: 0.2s; }
+    .toggle .slider:before { content: ''; position: absolute; height: 14px; width: 14px; left: 2px; bottom: 2px; background: #666; border-radius: 50%; transition: 0.2s; }
+    .toggle input:checked + .slider { background: #6366f1; }
+    .toggle input:checked + .slider:before { transform: translateX(14px); background: #fff; }
+
+    .btn-restore {
+      background: none; border: 1px solid #6366f1; color: #a5b4fc; cursor: pointer;
+      font-size: 10px; padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+    }
+    .btn-restore:hover { background: #2d2250; }
+    .btn-triage-tab {
+      background: none; border: 1px solid #7c3aed; color: #c084fc; cursor: pointer;
+      font-size: 10px; padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+    }
+    .btn-triage-tab:hover { background: #3b1a4a; }
 
     .btn-close-tab {
       background: none; border: none; color: #475569; cursor: pointer;
@@ -157,7 +178,13 @@
   <div class="actions-bar" id="actions-bar">
     <button class="btn-action" id="btn-dupes">Close Duplicates</button>
     <button class="btn-action" id="btn-suspend-stale">Suspend Stale</button>
+    <button class="btn-action" id="btn-triage">Triage Disposable</button>
     <button class="btn-action" id="btn-refresh">Refresh</button>
+  </div>
+
+  <div class="toggle-row">
+    <span>Auto-triage disposable tabs</span>
+    <label class="toggle"><input type="checkbox" id="triage-toggle"><span class="slider"></span></label>
   </div>
 
   <div class="tabs-nav" id="tabs-nav">
@@ -165,6 +192,7 @@
     <button class="tab-btn" data-view="hogs">Hogs</button>
     <button class="tab-btn" data-view="stale">Stale</button>
     <button class="tab-btn" data-view="disposable">Dispose</button>
+    <button class="tab-btn" data-view="triage">Triage</button>
     <button class="tab-btn" data-view="suspended">Suspended</button>
   </div>
 

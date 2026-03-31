@@ -106,6 +106,110 @@ async function updateWhitelist(action, domains) {
   return whitelist;
 }
 
+// --- Triage window: staging area for disposable tabs ---
+let triageWindowId = null;
+
+async function getOrCreateTriageWindow() {
+  // Check if stored window still exists
+  if (triageWindowId) {
+    try {
+      await chrome.windows.get(triageWindowId);
+      return triageWindowId;
+    } catch { triageWindowId = null; }
+  }
+  // Check storage
+  const stored = await chrome.storage.local.get('triageWindowId');
+  if (stored.triageWindowId) {
+    try {
+      await chrome.windows.get(stored.triageWindowId);
+      triageWindowId = stored.triageWindowId;
+      return triageWindowId;
+    } catch { /* window gone */ }
+  }
+  // Create new minimized window
+  const win = await chrome.windows.create({ state: 'minimized', focused: false });
+  triageWindowId = win.id;
+  await chrome.storage.local.set({ triageWindowId });
+  return triageWindowId;
+}
+
+async function getTriageWindowId() {
+  if (triageWindowId) {
+    try { await chrome.windows.get(triageWindowId); return triageWindowId; } catch { triageWindowId = null; }
+  }
+  const stored = await chrome.storage.local.get('triageWindowId');
+  if (stored.triageWindowId) {
+    try { await chrome.windows.get(stored.triageWindowId); triageWindowId = stored.triageWindowId; return triageWindowId; } catch { /* gone */ }
+  }
+  return null;
+}
+
+async function triageTabs(tabIds) {
+  if (!tabIds || tabIds.length === 0) return { error: 'No tab IDs provided' };
+  const winId = await getOrCreateTriageWindow();
+  const results = { triaged: 0, skipped: 0 };
+  const whitelist = await getWhitelist();
+
+  for (const tabId of tabIds) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      // Skip pinned, grouped, or already in triage
+      if (tab.pinned || tab.windowId === winId) { results.skipped++; continue; }
+      if (tab.groupId !== -1) { results.skipped++; continue; }
+      // Skip whitelisted domains
+      try {
+        const domain = new URL(tab.url).hostname.replace('www.', '');
+        if (whitelist.some(d => domain.includes(d))) { results.skipped++; continue; }
+      } catch {}
+      // Suspend first to save memory
+      if (!isSuspendedTab(tab.url) && !tab.url.startsWith('chrome://') && !tab.url.startsWith('edge://')) {
+        const suspendUrl = `${OWN_SUSPEND_PREFIX}#ttl=${encodeURIComponent(tab.title)}&uri=${encodeURIComponent(tab.url)}`;
+        await chrome.tabs.update(tabId, { url: suspendUrl });
+      }
+      // Move to triage window
+      await chrome.tabs.move(tabId, { windowId: winId, index: -1 });
+      results.triaged++;
+    } catch { results.skipped++; }
+  }
+  // Keep triage minimized
+  try { await chrome.windows.update(winId, { state: 'minimized' }); } catch {}
+  return results;
+}
+
+async function restoreFromTriage(tabIds) {
+  const triageWin = await getTriageWindowId();
+  if (!triageWin) return { error: 'No triage window found' };
+  // Find the last focused non-triage window
+  const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+  const mainWin = windows.find(w => w.id !== triageWin && w.focused) || windows.find(w => w.id !== triageWin);
+  if (!mainWin) return { error: 'No main window to restore to' };
+  let restored = 0;
+  for (const tabId of tabIds) {
+    try {
+      await chrome.tabs.move(tabId, { windowId: mainWin.id, index: -1 });
+      await chrome.tabs.update(tabId, { active: true });
+      restored++;
+    } catch {}
+  }
+  await chrome.windows.update(mainWin.id, { focused: true });
+  return { restored, windowId: mainWin.id };
+}
+
+async function listTriageTabs() {
+  const triageWin = await getTriageWindowId();
+  if (!triageWin) return [];
+  const tabs = await chrome.tabs.query({ windowId: triageWin });
+  return tabs.map(t => {
+    const parsed = isSuspendedTab(t.url) ? parseSuspendedUrl(t.url) : { title: '', originalUrl: '' };
+    return {
+      id: t.id, windowId: t.windowId,
+      title: parsed.title || t.title,
+      url: parsed.originalUrl || t.url,
+      suspended: isSuspendedTab(t.url),
+    };
+  });
+}
+
 // --- Tab time tracking ---
 let tabTracking = {};
 let activeTabId = null;
@@ -168,7 +272,18 @@ chrome.tabs.onCreated.addListener((tab) => {
   persistTracking();
 });
 
-chrome.tabs.onActivated.addListener((activeInfo) => {
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  // Auto-restore: if user activates a tab in triage window, move it back
+  const triageWin = await getTriageWindowId();
+  if (triageWin) {
+    try {
+      const tab = await chrome.tabs.get(activeInfo.tabId);
+      if (tab.windowId === triageWin) {
+        restoreFromTriage([activeInfo.tabId]);
+        return; // skip tracking for this activation
+      }
+    } catch {}
+  }
   const now = Date.now();
   // End focus for previous tab
   if (activeTabId && tabTracking[activeTabId]) {
@@ -454,6 +569,15 @@ async function handleNativeMessage(message) {
       case 'getTabTracking':
         result = { data: tabTracking };
         break;
+      case 'triageTabs':
+        result = await triageTabs(payload.tabIds);
+        break;
+      case 'restoreFromTriage':
+        result = await restoreFromTriage(payload.tabIds);
+        break;
+      case 'listTriageTabs':
+        result = await listTriageTabs();
+        break;
       case 'recordCleanupResult': {
         const kept = payload.kept || [];
         const closed = payload.closed || [];
@@ -482,7 +606,8 @@ async function handleNativeMessage(message) {
 
 async function getTabs() {
   const windows = await chrome.windows.getAll({});
-  const normalWindowIds = new Set(windows.filter(w => w.type === 'normal').map(w => w.id));
+  const triageWin = await getTriageWindowId();
+  const normalWindowIds = new Set(windows.filter(w => w.type === 'normal' && w.id !== triageWin).map(w => w.id));
 
   const tabs = await chrome.tabs.query({});
   const groups = await chrome.tabGroups.query({});
@@ -655,6 +780,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === 'getTabTracking') {
     sendResponse(tabTracking);
+  } else if (message.action === 'triageTabs') {
+    triageTabs(message.tabIds).then(sendResponse);
+    return true;
+  } else if (message.action === 'restoreFromTriage') {
+    restoreFromTriage(message.tabIds).then(sendResponse);
+    return true;
+  } else if (message.action === 'listTriageTabs') {
+    listTriageTabs().then(sendResponse);
+    return true;
   }
 });
 
@@ -671,6 +805,28 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const data = await chrome.storage.local.get('decisionLog');
   const log = data.decisionLog || [];
   if (log.length > 500) await chrome.storage.local.set({ decisionLog: log.slice(-500) });
+
+  // Auto-triage if enabled
+  const settings = await chrome.storage.local.get('autoTriageEnabled');
+  if (settings.autoTriageEnabled) {
+    const closed = log.filter(d => d.outcome === 'closed');
+    const kept = log.filter(d => d.outcome === 'kept');
+    if (closed.length >= 10 && kept.length >= 5) {
+      // Simple dispose check: tabs idle > 1 day + high dispose signal
+      const now = Date.now();
+      const idleThreshold = 24 * 60 * 60000; // 1 day
+      const toTriage = [];
+      for (const tab of tabs) {
+        const tr = tabTracking[tab.id];
+        if (!tr || !isTrackableDomain(tr.domain)) continue;
+        if (tab.pinned || tab.groupId !== -1) continue;
+        if ((now - tr.lastVisitedAt) > idleThreshold && (tr.activationCount || 0) <= 2) {
+          toTriage.push(tab.id);
+        }
+      }
+      if (toTriage.length > 0) await triageTabs(toTriage);
+    }
+  }
 });
 
 // Connect on startup
