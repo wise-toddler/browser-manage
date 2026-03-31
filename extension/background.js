@@ -778,6 +778,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'getDomainStats') {
     chrome.storage.local.get('domainStats').then(d => sendResponse(d.domainStats || {}));
     return true;
+  } else if (message.action === 'unsuspendCurrent') {
+    // Called from suspended.html when user clicks to restore
+    chrome.tabs.update(sender.tab.id, { url: message.url });
+    sendResponse({ ok: true });
   } else if (message.action === 'getTabTracking') {
     sendResponse(tabTracking);
   } else if (message.action === 'triageTabs') {
