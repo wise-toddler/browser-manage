@@ -3,6 +3,7 @@ let memoryData = null;
 let staleData = [];
 let suspendedData = [];
 let disposableData = [];
+let triageData = [];
 let pendingChanges = null;
 let tabTrackingData = {};
 let decisionLog = [];
@@ -65,6 +66,13 @@ async function loadExtendedData() {
 
     // Compute dispose predictions per tab
     disposableData = computeDisposable(allTabs, tracking, decisionLog, domainStats);
+
+    // Load triage window tabs
+    triageData = await new Promise(r => chrome.runtime.sendMessage({ action: 'listTriageTabs' }, r)) || [];
+
+    // Load triage toggle state
+    const triageSettings = await chrome.storage.local.get('autoTriageEnabled');
+    document.getElementById('triage-toggle').checked = triageSettings.autoTriageEnabled || false;
 
     // Update learned stat
     document.getElementById('stat-decisions').textContent = decisionLog.length;
@@ -170,7 +178,7 @@ function computeDisposable(tabs, tracking, log, stats) {
 }
 
 function updateTabCounts() {
-  const counts = { all: allTabs.length, hogs: 0, stale: staleData.length, disposable: disposableData.length, suspended: suspendedData.length };
+  const counts = { all: allTabs.length, hogs: 0, stale: staleData.length, disposable: disposableData.length, triage: triageData.length, suspended: suspendedData.length };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const view = btn.dataset.view;
     const count = counts[view] || 0;
@@ -221,6 +229,9 @@ function renderTabs() {
       break;
     case 'disposable':
       tabs = disposableData;
+      break;
+    case 'triage':
+      tabs = triageData;
       break;
     case 'suspended':
       tabs = suspendedData;
@@ -283,6 +294,8 @@ function renderTabs() {
         </div>
         <div class="meta">
           ${badges.join('')}
+          ${currentView === 'triage' ? `<button class="btn-restore" data-tab-id="${t.id}" title="Restore to main">Keep</button>` : ''}
+          ${currentView === 'disposable' || (currentView === 'all' && disposableData.find(d => d.id === t.id)) ? `<button class="btn-triage-tab" data-tab-id="${t.id}" title="Move to triage">Triage</button>` : ''}
           <button class="btn-close-tab" data-tab-id="${t.id}" title="Close tab">&times;</button>
         </div>
       </div>
@@ -302,6 +315,35 @@ function renderTabs() {
       updateTabCounts();
       renderTabs();
       showToast('Tab closed');
+    });
+  });
+
+  // Restore from triage buttons
+  listEl.querySelectorAll('.btn-restore').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const tabId = parseInt(btn.dataset.tabId);
+      await new Promise(r => chrome.runtime.sendMessage({ action: 'restoreFromTriage', tabIds: [tabId] }, r));
+      triageData = triageData.filter(t => t.id !== tabId);
+      updateTabCounts();
+      renderTabs();
+      showToast('Restored to main window');
+    });
+  });
+
+  // Triage buttons
+  listEl.querySelectorAll('.btn-triage-tab').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const tabId = parseInt(btn.dataset.tabId);
+      await new Promise(r => chrome.runtime.sendMessage({ action: 'triageTabs', tabIds: [tabId] }, r));
+      allTabs = allTabs.filter(t => t.id !== tabId);
+      disposableData = disposableData.filter(t => t.id !== tabId);
+      triageData = await new Promise(r => chrome.runtime.sendMessage({ action: 'listTriageTabs' }, r)) || [];
+      renderStats();
+      updateTabCounts();
+      renderTabs();
+      showToast('Moved to triage');
     });
   });
 
@@ -390,6 +432,31 @@ document.getElementById('btn-suspend-stale').addEventListener('click', async () 
   renderTabs();
   btn.textContent = 'Suspend Stale';
   btn.disabled = false;
+});
+
+// Triage all disposable tabs
+document.getElementById('btn-triage').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-triage');
+  if (disposableData.length === 0) { showToast('No disposable tabs'); return; }
+  btn.disabled = true;
+  btn.textContent = 'Triaging...';
+  const tabIds = disposableData.map(t => t.id);
+  await new Promise(r => chrome.runtime.sendMessage({ action: 'triageTabs', tabIds }, r));
+  allTabs = await chrome.runtime.sendMessage({ action: 'getTabs' });
+  triageData = await new Promise(r => chrome.runtime.sendMessage({ action: 'listTriageTabs' }, r)) || [];
+  await loadExtendedData();
+  renderStats();
+  updateTabCounts();
+  renderTabs();
+  showToast(`Triaged ${tabIds.length} tabs`);
+  btn.textContent = 'Triage Disposable';
+  btn.disabled = false;
+});
+
+// Auto-triage toggle
+document.getElementById('triage-toggle').addEventListener('change', async (e) => {
+  await chrome.storage.local.set({ autoTriageEnabled: e.target.checked });
+  showToast(e.target.checked ? 'Auto-triage enabled' : 'Auto-triage disabled');
 });
 
 // Refresh
