@@ -781,6 +781,16 @@ async def call_tool(name: str, arguments: dict):
         tab_ids = arguments.get("tab_ids", [])
         if not group_name or not tab_ids:
             return [TextContent(type="text", text="Error: name and tab_ids are required")]
+        # Check for existing group with same name first
+        existing = send_extension_command("getTabs", {}, profile=profile)
+        if isinstance(existing, list):
+            for t in existing:
+                gi = t.get('groupInfo')
+                if gi and gi.get('title') == group_name:
+                    result = send_extension_command("addToGroup", {"groupId": t['groupId'], "tabIds": tab_ids}, profile=profile)
+                    if isinstance(result, dict) and "error" in result:
+                        return [TextContent(type="text", text=f"Error: {result['error']}")]
+                    return [TextContent(type="text", text=f"Added {len(tab_ids)} tabs to existing group '{group_name}'")]
         result = send_extension_command("createGroup", {"name": group_name, "color": color, "tabIds": tab_ids}, profile=profile)
         if "error" in result:
             return [TextContent(type="text", text=f"Error: {result['error']}")]
