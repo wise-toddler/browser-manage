@@ -35,9 +35,11 @@ def read_message_nonblocking():
     """Try to read a message from stdin, return None if no data available."""
     try:
         raw_length = sys.stdin.buffer.read(4)
-        if not raw_length:
-            return None
-        if len(raw_length) < 4:
+        # b'' on a non-blocking fd is EOF: extension port closed, don't linger as an orphan
+        if raw_length == b'':
+            log("Extension port closed (EOF), exiting")
+            sys.exit(0)
+        if not raw_length or len(raw_length) < 4:
             return None
         length = struct.unpack('=I', raw_length)[0]
         message = sys.stdin.buffer.read(length)
@@ -50,11 +52,15 @@ def read_message_nonblocking():
         return None
 
 def send_message(message):
-    """Send a message to stdout (native messaging protocol)."""
+    """Send a message to stdout (native messaging protocol); exit if the port is dead."""
     encoded = json.dumps(message).encode('utf-8')
-    sys.stdout.buffer.write(struct.pack('=I', len(encoded)))
-    sys.stdout.buffer.write(encoded)
-    sys.stdout.buffer.flush()
+    try:
+        sys.stdout.buffer.write(struct.pack('=I', len(encoded)))
+        sys.stdout.buffer.write(encoded)
+        sys.stdout.buffer.flush()
+    except BrokenPipeError:
+        log("Extension port broken (EPIPE), exiting")
+        sys.exit(0)
 
 def write_result(result):
     """Write result for MCP server to read."""
@@ -152,14 +158,17 @@ def main():
                 if message.get('action') == 'identify':
                     payload = message.get('payload', {})
                     set_ipc_paths(payload.get('browser', 'unknown'), payload.get('profile', 'default'))
+                elif message.get('id') == 'ping':
+                    # Pong: only a real round-trip proves the extension is alive
+                    update_registry(identity['browser'], identity['profile'])
                 elif 'result' in message:
                     write_result(message['result'])
                     log("Wrote result file")
 
-            # Registry heartbeat every 30s
+            # Ping extension every 30s; registry last_seen updates only on pong
             now = time.time()
             if identity and now - last_heartbeat > 30:
-                update_registry(identity['browser'], identity['profile'])
+                send_message({'id': 'ping', 'action': 'ping', 'payload': {}})
                 last_heartbeat = now
 
             # Small sleep to avoid busy loop

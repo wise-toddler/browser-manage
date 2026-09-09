@@ -53,7 +53,11 @@ def send_extension_command(action: str, payload: dict, timeout: int = 10, profil
                 match = p
                 break
         if match:
-            return _send_to_ipc(action, payload, match['cmd_file'], match['result_file'], timeout)
+            result = _send_to_ipc(action, payload, match['cmd_file'], match['result_file'], timeout)
+            if isinstance(result, dict) and result.get('error') == 'timeout waiting for extension':
+                age = time.time() - match.get('last_seen', 0)
+                result['error'] = f"extension unresponsive (last pong {age:.0f}s ago, host pid {match.get('pid')})"
+            return result
         active = [f"{p['browser']}-{p['profile']}" for p in profiles]
         return {"error": f"Profile '{profile}' not found. Active: {active}"}
     # Default IPC files
