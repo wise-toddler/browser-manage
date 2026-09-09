@@ -503,6 +503,9 @@ async function handleNativeMessage(message) {
 
   try {
     switch (action) {
+      case 'ping':
+        result = 'pong';
+        break;
       case 'getTabs':
         result = await getTabs();
         break;
