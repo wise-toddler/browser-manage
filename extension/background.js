@@ -785,9 +785,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// MV3 keepalive: 20s alarm keeps service worker alive (SW suspends after 30s idle)
+chrome.alarms.create('keepalive', { periodInMinutes: 20/60 });
 // Periodic checkpoint: tabs still alive = survived signal
 chrome.alarms.create('checkpoint', { periodInMinutes: 30 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'keepalive') {
+    // Ping native port to keep both SW and connection alive
+    if (!port) connectNative();
+    return;
+  }
   if (alarm.name !== 'checkpoint') return;
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
