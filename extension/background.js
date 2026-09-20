@@ -107,14 +107,15 @@ async function updateWhitelist(action, domains) {
 }
 
 // --- Script execution (console-like), gated by a human-managed domain allowlist ---
-// The allowlist is only editable from the popup: no native-message action mutates it,
-// so whoever drives the MCP side cannot grant itself access.
+// Default allowlist is ['*'] (all sites). To lock down, remove '*' in the popup and add domains;
+// the list is only editable from the popup, so the MCP side cannot widen it again.
 const SCRIPT_TIMEOUT_MS = 8000;
 const SCRIPT_RESULT_CAP = 20000;
 
-// Exact host or true subdomain only ('evil-github.com' must not match 'github.com')
+// '*' allows every site (the default); otherwise exact host or true subdomain only
+// ('evil-github.com' must not match 'github.com')
 function hostAllowed(host, list) {
-  return list.some(d => host === d || host.endsWith('.' + d));
+  return list.includes('*') || list.some(d => host === d || host.endsWith('.' + d));
 }
 
 async function logScript(entry) {
@@ -124,7 +125,7 @@ async function logScript(entry) {
 }
 
 async function getScriptInfo() {
-  const { scriptAllowlist = [], scriptLog = [] } = await chrome.storage.local.get(['scriptAllowlist', 'scriptLog']);
+  const { scriptAllowlist = ['*'], scriptLog = [] } = await chrome.storage.local.get(['scriptAllowlist', 'scriptLog']);
   return { allowlist: scriptAllowlist, recent: scriptLog.slice(-20) };
 }
 
@@ -138,7 +139,7 @@ async function runScript(tabId, code) {
     const u = new URL(tab.url);
     if (u.protocol === 'http:' || u.protocol === 'https:') host = u.hostname;
   } catch {}
-  const { scriptAllowlist = [] } = await chrome.storage.local.get('scriptAllowlist');
+  const { scriptAllowlist = ['*'] } = await chrome.storage.local.get('scriptAllowlist');
   if (!host || !hostAllowed(host, scriptAllowlist)) {
     await logScript({ tabId, url: tab.url, code, ok: false, error: 'domain not allowlisted' });
     return { error: `Domain '${host || tab.url.slice(0, 60)}' is not in the script allowlist. Add it from the extension popup (Script allowlist).`, allowlist: scriptAllowlist };

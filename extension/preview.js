@@ -485,17 +485,17 @@ document.getElementById('apply-btn').addEventListener('click', async () => {
 });
 
 // --- Script allowlist: the only place it can be edited (deliberately not exposed over MCP) ---
-const DOMAIN_RE = /^(([a-z0-9-]+\.)+[a-z]{2,}|localhost|\d{1,3}(\.\d{1,3}){3})$/;
+const DOMAIN_RE = /^(\*|([a-z0-9-]+\.)+[a-z]{2,}|localhost|\d{1,3}(\.\d{1,3}){3})$/;
 
 async function renderScriptAllowlist() {
-  const { scriptAllowlist = [] } = await chrome.storage.local.get('scriptAllowlist');
+  const { scriptAllowlist = ['*'] } = await chrome.storage.local.get('scriptAllowlist');
   document.getElementById('script-allow-count').textContent = scriptAllowlist.length;
   const el = document.getElementById('script-allow-list');
   el.innerHTML = scriptAllowlist.map(d =>
     `<div class="tab-item"><div class="info"><div class="title">${escapeHtml(d)}</div></div><button class="btn-close-tab" data-domain="${escapeHtml(d)}" title="Remove">&times;</button></div>`
   ).join('') || '<div class="empty">No domains allowed — scripts are blocked everywhere</div>';
   el.querySelectorAll('[data-domain]').forEach(btn => btn.addEventListener('click', async () => {
-    const { scriptAllowlist: cur = [] } = await chrome.storage.local.get('scriptAllowlist');
+    const { scriptAllowlist: cur = ['*'] } = await chrome.storage.local.get('scriptAllowlist');
     await chrome.storage.local.set({ scriptAllowlist: cur.filter(x => x !== btn.dataset.domain) });
     renderScriptAllowlist();
   }));
@@ -504,8 +504,8 @@ async function renderScriptAllowlist() {
 document.getElementById('script-allow-add').addEventListener('click', async () => {
   const input = document.getElementById('script-allow-input');
   const domain = input.value.trim().toLowerCase().replace(/^https?:\/\//, '').split(/[/:]/)[0].replace(/^www\./, '');
-  if (!DOMAIN_RE.test(domain)) { showToast('Enter a domain like example.com'); return; }
-  const { scriptAllowlist = [] } = await chrome.storage.local.get('scriptAllowlist');
+  if (!DOMAIN_RE.test(domain)) { showToast('Enter a domain like example.com, or * for all sites'); return; }
+  const { scriptAllowlist = ['*'] } = await chrome.storage.local.get('scriptAllowlist');
   await chrome.storage.local.set({ scriptAllowlist: [...new Set([...scriptAllowlist, domain])] });
   input.value = '';
   renderScriptAllowlist();

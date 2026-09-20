@@ -659,7 +659,7 @@ async def list_tools():
         ),
         Tool(
             name="browser_run_script",
-            description="Run JavaScript in a tab's page context (like the DevTools console) and return the result. Only works on domains in the script allowlist, which is editable ONLY from the extension popup. 8s timeout; every run is logged.",
+            description="Run JavaScript in a tab's page context (like the DevTools console) and return the result. Allowed on all sites by default; the allowlist can be narrowed from the extension popup. 8s timeout; every run is logged.",
             inputSchema={
                 "type": "object",
                 "properties": {

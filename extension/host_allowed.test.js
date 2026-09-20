@@ -15,4 +15,6 @@ assert(!hostAllowed('github.com.attacker.io', list), 'allowlisted name as a pref
 assert(!hostAllowed('notgithub.com', list));
 assert(!hostAllowed('', list));
 assert(!hostAllowed('github.com', []), 'empty allowlist blocks everything');
+assert(hostAllowed('anything.example', ['*']), "'*' allows every host");
+assert(hostAllowed('github.com', ['*', 'x.com']));
 console.log('hostAllowed OK');
