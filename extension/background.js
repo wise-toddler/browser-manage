@@ -141,7 +141,7 @@ async function runScript(tabId, code) {
   const { scriptAllowlist = [] } = await chrome.storage.local.get('scriptAllowlist');
   if (!host || !hostAllowed(host, scriptAllowlist)) {
     await logScript({ tabId, url: tab.url, code, ok: false, error: 'domain not allowlisted' });
-    return { error: `Domain '${host || tab.url}' is not in the script allowlist. Add it from the extension popup (Script allowlist).`, allowlist: scriptAllowlist };
+    return { error: `Domain '${host || tab.url.slice(0, 60)}' is not in the script allowlist. Add it from the extension popup (Script allowlist).`, allowlist: scriptAllowlist };
   }
 
   const target = { tabId };
