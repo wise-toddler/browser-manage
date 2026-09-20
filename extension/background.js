@@ -106,6 +106,75 @@ async function updateWhitelist(action, domains) {
   return whitelist;
 }
 
+// --- Script execution (console-like), gated by a human-managed domain allowlist ---
+// The allowlist is only editable from the popup: no native-message action mutates it,
+// so whoever drives the MCP side cannot grant itself access.
+const SCRIPT_TIMEOUT_MS = 8000;
+const SCRIPT_RESULT_CAP = 20000;
+
+// Exact host or true subdomain only ('evil-github.com' must not match 'github.com')
+function hostAllowed(host, list) {
+  return list.some(d => host === d || host.endsWith('.' + d));
+}
+
+async function logScript(entry) {
+  const { scriptLog = [] } = await chrome.storage.local.get('scriptLog');
+  scriptLog.push({ ts: Date.now(), ...entry, code: entry.code.slice(0, 2000) });
+  await chrome.storage.local.set({ scriptLog: scriptLog.slice(-100) });
+}
+
+async function getScriptInfo() {
+  const { scriptAllowlist = [], scriptLog = [] } = await chrome.storage.local.get(['scriptAllowlist', 'scriptLog']);
+  return { allowlist: scriptAllowlist, recent: scriptLog.slice(-20) };
+}
+
+async function runScript(tabId, code) {
+  if (typeof tabId !== 'number' || typeof code !== 'string' || !code) {
+    return { error: 'tabId (number) and code (non-empty string) required' };
+  }
+  const tab = await chrome.tabs.get(tabId);
+  let host = '';
+  try {
+    const u = new URL(tab.url);
+    if (u.protocol === 'http:' || u.protocol === 'https:') host = u.hostname;
+  } catch {}
+  const { scriptAllowlist = [] } = await chrome.storage.local.get('scriptAllowlist');
+  if (!host || !hostAllowed(host, scriptAllowlist)) {
+    await logScript({ tabId, url: tab.url, code, ok: false, error: 'domain not allowlisted' });
+    return { error: `Domain '${host || tab.url}' is not in the script allowlist. Add it from the extension popup (Script allowlist).`, allowlist: scriptAllowlist };
+  }
+
+  const target = { tabId };
+  let out;
+  try {
+    await chrome.debugger.attach(target, '1.3');
+    // Re-check after attach: the tab may have navigated since the URL check above
+    const live = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', { expression: 'location.hostname', returnByValue: true });
+    if (!hostAllowed(live.result?.value || '', scriptAllowlist)) throw new Error('tab navigated to a non-allowlisted domain');
+
+    const evalP = chrome.debugger.sendCommand(target, 'Runtime.evaluate', { expression: code, returnByValue: true, awaitPromise: true });
+    evalP.catch(() => {}); // detach below rejects it on timeout
+    const r = await Promise.race([
+      evalP,
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`script timed out after ${SCRIPT_TIMEOUT_MS}ms`)), SCRIPT_TIMEOUT_MS)),
+    ]);
+    if (r.exceptionDetails) {
+      out = { error: r.exceptionDetails.exception?.description || r.exceptionDetails.text };
+    } else {
+      const s = JSON.stringify(r.result.value) ?? 'undefined';
+      out = s.length > SCRIPT_RESULT_CAP
+        ? { result: s.slice(0, SCRIPT_RESULT_CAP), truncated: true, type: r.result.type }
+        : { result: r.result.value, type: r.result.type };
+    }
+  } catch (e) {
+    out = { error: e.message };
+  } finally {
+    try { await chrome.debugger.detach(target); } catch {}
+  }
+  await logScript({ tabId, url: tab.url, code, ok: !out.error, error: out.error });
+  return out;
+}
+
 // --- Triage window: staging area for disposable tabs ---
 let triageWindowId = null;
 
@@ -517,6 +586,12 @@ async function handleNativeMessage(message) {
         break;
       case 'closeTabs':
         result = await closeTabs(payload.tabIds);
+        break;
+      case 'runScript':
+        result = await runScript(payload.tabId, payload.code);
+        break;
+      case 'getScriptInfo':
+        result = await getScriptInfo();
         break;
       case 'openTabs':
         result = await openTabs(payload.urls, payload.active);
