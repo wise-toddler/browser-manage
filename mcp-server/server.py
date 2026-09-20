@@ -642,6 +642,21 @@ async def list_tools():
                 "required": ["tab_ids"]
             }
         ),
+        Tool(
+            name="browser_open_tabs",
+            description="Open URLs as new background tabs (http/https only). Optionally add them to a named group (reuses an existing group with that name).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "urls": {"type": "array", "description": "URLs to open", "items": {"type": "string"}},
+                    "group": {"type": "string", "description": "Optional group name to put the new tabs in"},
+                    "color": {"type": "string", "description": "Group color if a new group is created", "default": "blue"},
+                    "active": {"type": "boolean", "description": "Focus the first opened tab", "default": False},
+                    **PROFILE_PROP
+                },
+                "required": ["urls"]
+            }
+        ),
         # v1.5 - Metrics & Learning
         Tool(
             name="browser_get_decision_log",
@@ -936,6 +951,22 @@ async def call_tool(name: str, arguments: dict):
         if isinstance(result, dict) and "error" in result:
             return [TextContent(type="text", text=f"Error: {result['error']}")]
         return [TextContent(type="text", text=f"Closed {len(tab_ids)} tabs")]
+
+    elif name == "browser_open_tabs":
+        urls = arguments.get("urls", [])
+        # Only web URLs: no javascript:, file:, chrome: etc.
+        bad = [u for u in urls if urlparse(u).scheme not in ("http", "https")]
+        if not urls or bad:
+            return [TextContent(type="text", text=f"Error: urls must be a non-empty list of http/https URLs. Rejected: {bad}")]
+        result = send_extension_command("openTabs", {"urls": urls, "active": arguments.get("active", False)}, profile=profile)
+        if isinstance(result, dict) and "error" in result:
+            return [TextContent(type="text", text=f"Error: {result['error']}")]
+        text = f"Opened {result.get('opened', 0)} tabs"
+        group = arguments.get("group")
+        if group and result.get("tabIds"):
+            grouped = await call_tool("browser_create_group", {"name": group, "color": arguments.get("color", "blue"), "tab_ids": result["tabIds"], "profile": profile})
+            text += f"; {grouped[0].text}"
+        return [TextContent(type="text", text=text)]
 
     # v1.5 - Metrics & Learning
     elif name == "browser_get_decision_log":

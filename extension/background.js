@@ -518,6 +518,9 @@ async function handleNativeMessage(message) {
       case 'closeTabs':
         result = await closeTabs(payload.tabIds);
         break;
+      case 'openTabs':
+        result = await openTabs(payload.urls, payload.active);
+        break;
       case 'createGroup':
         result = await createGroup(payload.name, payload.color, payload.tabIds);
         break;
@@ -689,6 +692,21 @@ async function closeTabs(tabIds) {
   tabIds.forEach(id => extensionClosing.add(id));
   await chrome.tabs.remove(tabIds);
   return { closed: tabIds.length };
+}
+
+// Open URLs in the main (non-triage) window, in the background unless active is set
+async function openTabs(urls, active) {
+  if (!urls || urls.length === 0) return { error: 'No URLs provided' };
+  const triageWin = await getTriageWindowId();
+  const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+  const win = windows.find(w => w.id !== triageWin && w.focused) || windows.find(w => w.id !== triageWin);
+  const tabIds = [];
+  for (const url of urls) {
+    const tab = await chrome.tabs.create({ url, active: false, ...(win ? { windowId: win.id } : {}) });
+    tabIds.push(tab.id);
+  }
+  if (active) await chrome.tabs.update(tabIds[0], { active: true });
+  return { opened: tabIds.length, tabIds };
 }
 
 async function createGroup(name, color, tabIds) {
