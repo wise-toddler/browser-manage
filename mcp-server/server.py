@@ -657,6 +657,24 @@ async def list_tools():
                 "required": ["urls"]
             }
         ),
+        Tool(
+            name="browser_run_script",
+            description="Run JavaScript in a tab's page context (like the DevTools console) and return the result. Allowed on all sites by default; the allowlist can be narrowed from the extension popup. 8s timeout; every run is logged.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "integer", "description": "Chrome tab ID to run in"},
+                    "code": {"type": "string", "description": "JS expression/statements; the last expression value is returned (promises are awaited)"},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_id", "code"]
+            }
+        ),
+        Tool(
+            name="browser_script_info",
+            description="Read-only: the script allowlist and the last 20 script runs (url, code, ok/error).",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
         # v1.5 - Metrics & Learning
         Tool(
             name="browser_get_decision_log",
@@ -951,6 +969,17 @@ async def call_tool(name: str, arguments: dict):
         if isinstance(result, dict) and "error" in result:
             return [TextContent(type="text", text=f"Error: {result['error']}")]
         return [TextContent(type="text", text=f"Closed {len(tab_ids)} tabs")]
+
+    elif name == "browser_run_script":
+        tab_id, code = arguments.get("tab_id"), arguments.get("code")
+        if not isinstance(tab_id, int) or not isinstance(code, str) or not code:
+            return [TextContent(type="text", text="Error: tab_id (integer) and code (non-empty string) are required")]
+        # Allowlist is enforced inside the extension against the tab's real hostname
+        result = send_extension_command("runScript", {"tabId": tab_id, "code": code}, profile=profile)
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "browser_script_info":
+        return _ext_result(send_extension_command("getScriptInfo", {}, profile=profile))
 
     elif name == "browser_open_tabs":
         urls = arguments.get("urls", [])
