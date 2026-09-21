@@ -2,6 +2,7 @@
 """MCP Server for browser tab management."""
 
 import json
+import base64
 import subprocess
 import asyncio
 import time
@@ -11,7 +12,7 @@ import math
 from urllib.parse import urlparse
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, ImageContent
 
 server = Server("browser-tabs")
 
@@ -671,6 +672,21 @@ async def list_tools():
             }
         ),
         Tool(
+            name="browser_screenshot",
+            description="Screenshot a tab (works on background tabs, no need to activate). Returns the image plus a saved file path.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "integer", "description": "Chrome tab ID"},
+                    "full_page": {"type": "boolean", "description": "Capture the whole scrollable page instead of the viewport", "default": False},
+                    "format": {"type": "string", "enum": ["jpeg", "png"], "default": "jpeg"},
+                    "path": {"type": "string", "description": "Where to save; default /tmp/tab-manager-shot-<tab_id>-<ts>.<ext>"},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_id"]
+            }
+        ),
+        Tool(
             name="browser_script_info",
             description="Read-only: the script allowlist and the last 20 script runs (url, code, ok/error).",
             inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
@@ -977,6 +993,22 @@ async def call_tool(name: str, arguments: dict):
         # Allowlist is enforced inside the extension against the tab's real hostname
         result = send_extension_command("runScript", {"tabId": tab_id, "code": code}, profile=profile)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "browser_screenshot":
+        tab_id = arguments.get("tab_id")
+        if not isinstance(tab_id, int):
+            return [TextContent(type="text", text="Error: tab_id (integer) is required")]
+        fmt = arguments.get("format", "jpeg")
+        result = send_extension_command("screenshot", {"tabId": tab_id, "fullPage": arguments.get("full_page", False), "format": fmt}, timeout=30, profile=profile)
+        if not isinstance(result, dict) or "error" in result or not result.get("data"):
+            return [TextContent(type="text", text=f"Error: {result.get('error', result) if isinstance(result, dict) else result}")]
+        path = arguments.get("path") or f"/tmp/tab-manager-shot-{tab_id}-{int(time.time())}.{'jpg' if fmt == 'jpeg' else 'png'}"
+        with open(path, "wb") as f:
+            f.write(base64.b64decode(result["data"]))
+        return [
+            ImageContent(type="image", data=result["data"], mimeType=f"image/{fmt}"),
+            TextContent(type="text", text=f"Saved {path} ({os.path.getsize(path) // 1024} KB, {'full page' if result.get('fullPage') else 'viewport'})"),
+        ]
 
     elif name == "browser_script_info":
         return _ext_result(send_extension_command("getScriptInfo", {}, profile=profile))

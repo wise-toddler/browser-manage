@@ -176,6 +176,27 @@ async function runScript(tabId, code) {
   return out;
 }
 
+// Screenshot via debugger so background tabs work without activating them
+async function screenshotTab(tabId, { fullPage = false, format = 'jpeg', quality = 85 } = {}) {
+  if (typeof tabId !== 'number') return { error: 'tabId (number) required' };
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, '1.3');
+    const params = { format, ...(format === 'jpeg' ? { quality } : {}) };
+    if (fullPage) {
+      const { cssContentSize: c } = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
+      params.clip = { x: 0, y: 0, width: c.width, height: c.height, scale: 1 };
+      params.captureBeyondViewport = true;
+    }
+    const { data } = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', params);
+    return { data, format, fullPage };
+  } catch (e) {
+    return { error: e.message };
+  } finally {
+    try { await chrome.debugger.detach(target); } catch {}
+  }
+}
+
 // --- Triage window: staging area for disposable tabs ---
 let triageWindowId = null;
 
@@ -587,6 +608,9 @@ async function handleNativeMessage(message) {
         break;
       case 'closeTabs':
         result = await closeTabs(payload.tabIds);
+        break;
+      case 'screenshot':
+        result = await screenshotTab(payload.tabId, payload);
         break;
       case 'runScript':
         result = await runScript(payload.tabId, payload.code);
