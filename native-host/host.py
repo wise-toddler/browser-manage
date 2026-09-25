@@ -31,24 +31,32 @@ def set_nonblocking(fd):
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
+# Bytes read from the extension but not yet a complete frame; large messages (screenshots)
+# arrive across many reads, and dropping a partial read would desync the whole stream
+_inbuf = bytearray()
+
 def read_message_nonblocking():
-    """Try to read a message from stdin, return None if no data available."""
+    """Return the next complete message from stdin, or None if one hasn't fully arrived yet."""
     try:
-        raw_length = sys.stdin.buffer.read(4)
+        chunk = os.read(sys.stdin.fileno(), 1 << 20)
         # b'' on a non-blocking fd is EOF: extension port closed, don't linger as an orphan
-        if raw_length == b'':
+        if chunk == b'':
             log("Extension port closed (EOF), exiting")
             sys.exit(0)
-        if not raw_length or len(raw_length) < 4:
-            return None
-        length = struct.unpack('=I', raw_length)[0]
-        message = sys.stdin.buffer.read(length)
-        if len(message) < length:
-            return None
-        return json.loads(message.decode('utf-8'))
+        _inbuf.extend(chunk)
     except BlockingIOError:
+        pass
+    if len(_inbuf) < 4:
         return None
+    length = struct.unpack('=I', _inbuf[:4])[0]
+    if len(_inbuf) < 4 + length:
+        return None
+    message = bytes(_inbuf[4:4 + length])
+    del _inbuf[:4 + length]
+    try:
+        return json.loads(message.decode('utf-8'))
     except Exception:
+        log("Dropped undecodable message")
         return None
 
 def send_message(message):
@@ -78,38 +86,37 @@ def set_ipc_paths(browser, profile):
     log(f"Identity set: {browser}/{safe_profile}")
     update_registry(browser, safe_profile)
 
-def update_registry(browser, profile):
-    """Register this profile in the shared registry."""
-    registry = {}
-    if os.path.exists(REGISTRY_FILE):
+def _edit_registry(fn):
+    """Read-modify-write the registry under an exclusive lock (one host per profile runs concurrently)."""
+    with open(REGISTRY_FILE + '.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        registry = {}
         try:
             with open(REGISTRY_FILE, 'r') as f:
                 registry = json.load(f)
         except Exception:
             pass
-    key = f"{browser}-{profile}"
-    registry[key] = {
+        fn(registry)
+        with open(REGISTRY_FILE, 'w') as f:
+            json.dump(registry, f)
+
+def update_registry(browser, profile):
+    """Register this profile in the shared registry."""
+    _edit_registry(lambda r: r.__setitem__(f"{browser}-{profile}", {
         "browser": browser,
         "profile": profile,
         "cmd_file": cmd_file,
         "result_file": result_file,
         "pid": os.getpid(),
         "last_seen": time.time()
-    }
-    with open(REGISTRY_FILE, 'w') as f:
-        json.dump(registry, f)
+    }))
 
 def remove_from_registry():
     """Remove this profile from the registry on exit."""
     if not identity:
         return
     try:
-        with open(REGISTRY_FILE, 'r') as f:
-            registry = json.load(f)
-        key = f"{identity['browser']}-{identity['profile']}"
-        registry.pop(key, None)
-        with open(REGISTRY_FILE, 'w') as f:
-            json.dump(registry, f)
+        _edit_registry(lambda r: r.pop(f"{identity['browser']}-{identity['profile']}", None))
     except Exception:
         pass
 
