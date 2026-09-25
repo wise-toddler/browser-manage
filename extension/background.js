@@ -176,6 +176,140 @@ async function runScript(tabId, code) {
   return out;
 }
 
+// Screenshot via debugger so background tabs work without activating them
+async function screenshotTab(tabId, { fullPage = false, format = 'jpeg', quality = 85 } = {}) {
+  if (typeof tabId !== 'number') return { error: 'tabId (number) required' };
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, '1.3');
+    const cdp = (m, a) => withTimeout(chrome.debugger.sendCommand(target, m, a), CDP_TIMEOUT_MS, m);
+    // Always render offscreen with an explicit clip: a plain capture waits for a compositor
+    // frame, which hidden/background tabs never produce, so it would hang
+    const { cssContentSize: c, cssVisualViewport: v } = await cdp('Page.getLayoutMetrics');
+    const clip = fullPage
+      ? { x: 0, y: 0, width: c.width, height: c.height, scale: 1 }
+      : { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: 1 };
+    const params = { format, clip, captureBeyondViewport: true, ...(format === 'jpeg' ? { quality } : {}) };
+    const { data } = await cdp('Page.captureScreenshot', params);
+    return { data, format, fullPage };
+  } catch (e) {
+    return { error: e.message };
+  } finally {
+    try { await chrome.debugger.detach(target); } catch {}
+  }
+}
+
+// --- Browser actions via CDP Input events (real mouse/keyboard, works on React-style apps) ---
+const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, PageUp: 33, PageDown: 34, ' ': 32 };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const CDP_TIMEOUT_MS = 8000;
+
+// A stuck CDP call must reject so `finally` detaches the debugger; otherwise every later command on the tab queues behind it
+function withTimeout(p, ms, label) {
+  p.catch(() => {});
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms))]);
+}
+
+// DOM-level fallback for hidden tabs: Input.dispatch* waits for a rendered frame that background tabs never produce
+function domActionExpr(p) {
+  const a = JSON.stringify({ action: p.action, selector: p.selector, x: p.x, y: p.y, text: p.text, key: p.key, deltaX: p.deltaX || 0, deltaY: p.deltaY ?? 600, double: !!p.double });
+  return `(() => { const p = ${a};
+    const el = p.selector ? document.querySelector(p.selector) : (p.x != null ? document.elementFromPoint(p.x, p.y) : document.activeElement);
+    if (p.action === 'scroll') { (p.selector && el ? el : window).scrollBy(p.deltaX, p.deltaY); return 'ok'; }
+    if (!el) return 'no element';
+    if (p.action === 'click') { el.scrollIntoView({block:'center'}); el.focus?.(); el.click(); if (p.double) el.dispatchEvent(new MouseEvent('dblclick', {bubbles:true})); return 'ok'; }
+    if (p.action === 'type') { el.focus?.(); return document.execCommand('insertText', false, p.text) ? 'ok' : 'insertText failed'; }
+    if (p.action === 'key') {
+      const o = { key: p.key, code: p.key, bubbles: true, cancelable: true };
+      const go = el.dispatchEvent(new KeyboardEvent('keydown', o)); el.dispatchEvent(new KeyboardEvent('keyup', o));
+      if (go && p.key === 'Enter' && el.form) el.form.requestSubmit();
+      return 'ok';
+    }
+    return 'unsupported'; })()`;
+}
+
+async function waitForLoad(tabId, ms = 10000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if ((await chrome.tabs.get(tabId)).status === 'complete') return;
+    await sleep(150);
+  }
+}
+
+async function doAction(tabId, p) {
+  if (typeof tabId !== 'number') return { error: 'tabId (number) required' };
+  const target = { tabId };
+  const cdp = (m, a) => withTimeout(chrome.debugger.sendCommand(target, m, a), CDP_TIMEOUT_MS, m);
+  const mouse = async (type, x, y, extra = {}) => cdp('Input.dispatchMouseEvent', { type, x, y, ...extra });
+  try {
+    if (p.action === 'activate') {
+      const t = await chrome.tabs.update(tabId, { active: true });
+      await chrome.windows.update(t.windowId, { focused: true });
+      return { ok: true };
+    }
+    if (p.action === 'navigate') {
+      if (!/^https?:\/\//.test(p.url || '')) return { error: 'navigate needs an http(s) url' };
+      await chrome.tabs.update(tabId, { url: p.url });
+      await sleep(300); await waitForLoad(tabId);
+      return { ok: true, url: (await chrome.tabs.get(tabId)).url };
+    }
+    await chrome.debugger.attach(target, '1.3');
+    if (['click', 'type', 'key', 'scroll'].includes(p.action)) {
+      const vis = await cdp('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true });
+      if (vis.result.value !== 'visible') {
+        const r = await cdp('Runtime.evaluate', { expression: domActionExpr(p), returnByValue: true, userGesture: true });
+        if (r.result.value !== 'ok') return { error: `${p.action} (hidden tab, DOM fallback): ${r.result.value}` };
+        await sleep(p.wait ?? 400);
+        return { ok: true, mode: 'dom-fallback (tab hidden)', url: (await chrome.tabs.get(tabId)).url };
+      }
+    }
+    let { x, y } = p;
+    if (p.selector) {
+      const expr = `(()=>{const e=document.querySelector(${JSON.stringify(p.selector)});if(!e)return null;e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`;
+      const r = await cdp('Runtime.evaluate', { expression: expr, returnByValue: true });
+      if (!r.result.value) return { error: `selector not found: ${p.selector}` };
+      ({ x, y } = r.result.value);
+    }
+    switch (p.action) {
+      case 'click': {
+        if (x == null || y == null) return { error: 'click needs x,y or selector' };
+        const button = p.button || 'left', clickCount = p.double ? 2 : 1;
+        await mouse('mouseMoved', x, y);
+        await mouse('mousePressed', x, y, { button, clickCount });
+        await mouse('mouseReleased', x, y, { button, clickCount });
+        break;
+      }
+      case 'type':
+        if (typeof p.text !== 'string') return { error: 'type needs text' };
+        await cdp('Input.insertText', { text: p.text });
+        break;
+      case 'key': {
+        const key = p.key; const vk = KEY_CODES[key];
+        if (!key) return { error: 'key needs key (e.g. Enter, Tab, Escape, ArrowDown)' };
+        const base = { key, code: key, ...(vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {}) };
+        await cdp('Input.dispatchKeyEvent', { type: vk ? 'rawKeyDown' : 'keyDown', ...base, ...(key.length === 1 ? { text: key } : {}) });
+        await cdp('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+        break;
+      }
+      case 'scroll':
+        await mouse('mouseWheel', x ?? 400, y ?? 300, { deltaX: p.deltaX || 0, deltaY: p.deltaY ?? 600 });
+        break;
+      case 'back': case 'forward':
+        await cdp('Runtime.evaluate', { expression: `history.${p.action}()` });
+        await sleep(300); await waitForLoad(tabId);
+        break;
+      default:
+        return { error: `unknown action: ${p.action}` };
+    }
+    await sleep(p.wait ?? 400);
+    return { ok: true, url: (await chrome.tabs.get(tabId)).url };
+  } catch (e) {
+    return { error: e.message };
+  } finally {
+    try { await chrome.debugger.detach(target); } catch {}
+  }
+}
+
 // --- Triage window: staging area for disposable tabs ---
 let triageWindowId = null;
 
@@ -587,6 +721,17 @@ async function handleNativeMessage(message) {
         break;
       case 'closeTabs':
         result = await closeTabs(payload.tabIds);
+        break;
+      case 'action':
+        result = await doAction(payload.tabId, payload);
+        break;
+      case 'reloadExtension':
+        // Reply first, then reload: the port dies with the worker and the host exits on EOF
+        if (port) port.postMessage({ id, result: { reloading: true } });
+        setTimeout(() => chrome.runtime.reload(), 200);
+        return;
+      case 'screenshot':
+        result = await screenshotTab(payload.tabId, payload);
         break;
       case 'runScript':
         result = await runScript(payload.tabId, payload.code);

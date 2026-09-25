@@ -2,6 +2,7 @@
 """MCP Server for browser tab management."""
 
 import json
+import base64
 import subprocess
 import asyncio
 import time
@@ -11,7 +12,7 @@ import math
 from urllib.parse import urlparse
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, ImageContent
 
 server = Server("browser-tabs")
 
@@ -160,6 +161,20 @@ tell application "{browser}"
     end repeat
 end tell
 '''
+
+
+def _screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "jpeg", path: str = None) -> list:
+    """Capture a tab via the extension; return ImageContent + saved path (or an error TextContent)."""
+    result = send_extension_command("screenshot", {"tabId": tab_id, "fullPage": full_page, "format": fmt}, timeout=30, profile=profile)
+    if not isinstance(result, dict) or "error" in result or not result.get("data"):
+        return [TextContent(type="text", text=f"Screenshot error: {result.get('error', result) if isinstance(result, dict) else result}")]
+    path = path or f"/tmp/tab-manager-shot-{tab_id}-{int(time.time())}.{'jpg' if fmt == 'jpeg' else 'png'}"
+    with open(path, "wb") as f:
+        f.write(base64.b64decode(result["data"]))
+    return [
+        ImageContent(type="image", data=result["data"], mimeType=f"image/{fmt}"),
+        TextContent(type="text", text=f"Saved {path} ({os.path.getsize(path) // 1024} KB, {'full page' if full_page else 'viewport'})"),
+    ]
 
 
 def _ext_result(result):
@@ -671,6 +686,49 @@ async def list_tools():
             }
         ),
         Tool(
+            name="browser_screenshot",
+            description="Screenshot a tab (works on background tabs, no need to activate). Returns the image plus a saved file path.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "integer", "description": "Chrome tab ID"},
+                    "full_page": {"type": "boolean", "description": "Capture the whole scrollable page instead of the viewport", "default": False},
+                    "format": {"type": "string", "enum": ["jpeg", "png"], "default": "jpeg"},
+                    "path": {"type": "string", "description": "Where to save; default /tmp/tab-manager-shot-<tab_id>-<ts>.<ext>"},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_id"]
+            }
+        ),
+        Tool(
+            name="browser_action",
+            description="Act in a tab with real mouse/keyboard events: click (x,y or selector), type text, press key, scroll, navigate, back/forward, activate. Returns a screenshot after the action unless screenshot=false.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "integer"},
+                    "action": {"type": "string", "enum": ["click", "type", "key", "scroll", "navigate", "back", "forward", "activate"]},
+                    "x": {"type": "number"}, "y": {"type": "number"},
+                    "selector": {"type": "string", "description": "CSS selector; scrolled into view, its center is used as x,y"},
+                    "text": {"type": "string", "description": "for type"},
+                    "key": {"type": "string", "description": "for key: Enter, Tab, Escape, Backspace, ArrowDown, ... or a single character"},
+                    "url": {"type": "string", "description": "for navigate"},
+                    "deltaY": {"type": "number", "description": "for scroll; default 600 (positive = down)"},
+                    "deltaX": {"type": "number"},
+                    "double": {"type": "boolean"}, "button": {"type": "string", "enum": ["left", "right", "middle"]},
+                    "wait": {"type": "integer", "description": "ms to wait after the action before screenshot, default 400"},
+                    "screenshot": {"type": "boolean", "default": True},
+                    **PROFILE_PROP
+                },
+                "required": ["tab_id", "action"]
+            }
+        ),
+        Tool(
+            name="browser_reload_extension",
+            description="Reload the extension from disk in one profile (what the edge://extensions refresh button does). Use after background.js changes.",
+            inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
+        ),
+        Tool(
             name="browser_script_info",
             description="Read-only: the script allowlist and the last 20 script runs (url, code, ok/error).",
             inputSchema={"type": "object", "properties": {**PROFILE_PROP}}
@@ -977,6 +1035,29 @@ async def call_tool(name: str, arguments: dict):
         # Allowlist is enforced inside the extension against the tab's real hostname
         result = send_extension_command("runScript", {"tabId": tab_id, "code": code}, profile=profile)
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    elif name == "browser_screenshot":
+        tab_id = arguments.get("tab_id")
+        if not isinstance(tab_id, int):
+            return [TextContent(type="text", text="Error: tab_id (integer) is required")]
+        return _screenshot(tab_id, profile, arguments.get("full_page", False), arguments.get("format", "jpeg"), arguments.get("path"))
+
+    elif name == "browser_action":
+        tab_id = arguments.get("tab_id")
+        if not isinstance(tab_id, int):
+            return [TextContent(type="text", text="Error: tab_id (integer) is required")]
+        payload = {k: v for k, v in arguments.items() if k not in ("tab_id", "profile", "screenshot")}
+        result = send_extension_command("action", {"tabId": tab_id, **payload}, timeout=30, profile=profile)
+        if not isinstance(result, dict) or "error" in result:
+            return [TextContent(type="text", text=f"Error: {result.get('error', result) if isinstance(result, dict) else result}")]
+        out = [TextContent(type="text", text=json.dumps(result))]
+        if arguments.get("screenshot", True) and arguments["action"] != "activate":
+            out = _screenshot(tab_id, profile) + out
+        return out
+
+    elif name == "browser_reload_extension":
+        result = send_extension_command("reloadExtension", {}, profile=profile)
+        return [TextContent(type="text", text=json.dumps(result))]
 
     elif name == "browser_script_info":
         return _ext_result(send_extension_command("getScriptInfo", {}, profile=profile))
