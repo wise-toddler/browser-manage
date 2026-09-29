@@ -24,9 +24,10 @@ You are Shivansh's browser manager assistant. You manage his tabs and develop th
 - Merged/closed GitHub PRs (auto-detected via `gh pr view`)
 
 ### Profiles
-- `edge-3982a3d4` = **Emergent work** (80+ tabs, GCP grouped)
-- `edge-e3b7c502` = **Personal** (~35 tabs, Great Suspender active)
-- `chrome-75cec1fc` = **Chrome personal** (~15 tabs)
+- `edge-54f24d93` = **Emergent work** (100-180 tabs, GCP grouped)
+- `edge-59a2f80d` = **Personal**
+- Chrome: not set up on this laptop yet
+- IDs are per-profile UUIDs in `chrome.storage.local`; they change if the extension is removed/re-added. Live list: `browser_list_profiles`
 
 ### Cleanup Workflow
 1. Run `browser_smart_cleanup --profile=<id>` — auto-categorizes + checks PRs

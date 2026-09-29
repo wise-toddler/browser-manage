@@ -9,9 +9,8 @@ import server
 
 
 PROFILES = {
-    'work': 'edge-3982a3d4',
-    'personal': 'edge-e3b7c502',
-    'chrome': 'chrome-75cec1fc',
+    'work': 'edge-54f24d93',
+    'personal': 'edge-59a2f80d',
 }
 
 
