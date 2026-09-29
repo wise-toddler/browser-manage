@@ -39,8 +39,8 @@ Manage tabs across all connected Chrome and Edge profiles via the `browser-manag
 
 ```bash
 mcp-call browser-manage browser_list_profiles
-mcp-call browser-manage browser_get_tabs_ext --profile=edge-3982a3d4
-mcp-call browser-manage browser_get_memory --profile=chrome-75cec1fc
+mcp-call browser-manage browser_get_tabs_ext --profile=edge-54f24d93
+mcp-call browser-manage browser_get_memory --profile=edge-59a2f80d
 mcp-call browser-manage browser_get_stale_tabs --threshold_hours=1
 mcp-call browser-manage browser_search_all_tabs --query=github
 mcp-call browser-manage browser_suspend_whitelist --action=list
