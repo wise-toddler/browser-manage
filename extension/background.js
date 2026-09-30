@@ -168,7 +168,7 @@ async function runScript(tabId, code) {
         : { result: r.result.value, type: r.result.type };
     }
   } catch (e) {
-    out = { error: e.message };
+    out = isForeignFrameError(e) ? await evalInPage(tabId, code) : { error: e.message };
   } finally {
     try { await chrome.debugger.detach(target); } catch {}
   }
@@ -193,7 +193,15 @@ async function screenshotTab(tabId, { fullPage = false, format = 'jpeg', quality
     const { data } = await cdp('Page.captureScreenshot', params);
     return { data, format, fullPage };
   } catch (e) {
-    return { error: e.message };
+    if (!isForeignFrameError(e)) return { error: e.message };
+    // Debugger refused: capture what the window shows. Only works for the visible active tab, viewport only
+    const tab = await chrome.tabs.get(tabId);
+    const win = await chrome.windows.get(tab.windowId);
+    if (!tab.active || win.state === 'minimized') {
+      return { error: "Debugger blocked by another extension's frame in this tab; the fallback capture needs the tab visible. Run browser_action action=activate first." };
+    }
+    const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format, ...(format === 'jpeg' ? { quality } : {}) });
+    return { data: url.split(',')[1], format, fullPage: false, mode: `captureVisibleTab${fullPage ? ' (full_page unsupported here, viewport only)' : ''}` };
   } finally {
     try { await chrome.debugger.detach(target); } catch {}
   }
@@ -210,22 +218,59 @@ function withTimeout(p, ms, label) {
   return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms))]);
 }
 
-// DOM-level fallback for hidden tabs: Input.dispatch* waits for a rendered frame that background tabs never produce
-function domActionExpr(p) {
-  const a = JSON.stringify({ action: p.action, selector: p.selector, x: p.x, y: p.y, text: p.text, key: p.key, deltaX: p.deltaX || 0, deltaY: p.deltaY ?? 600, double: !!p.double });
-  return `(() => { const p = ${a};
-    const el = p.selector ? document.querySelector(p.selector) : (p.x != null ? document.elementFromPoint(p.x, p.y) : document.activeElement);
-    if (p.action === 'scroll') { (p.selector && el ? el : window).scrollBy(p.deltaX, p.deltaY); return 'ok'; }
-    if (!el) return 'no element';
-    if (p.action === 'click') { el.scrollIntoView({block:'center'}); el.focus?.(); el.click(); if (p.double) el.dispatchEvent(new MouseEvent('dblclick', {bubbles:true})); return 'ok'; }
-    if (p.action === 'type') { el.focus?.(); return document.execCommand('insertText', false, p.text) ? 'ok' : 'insertText failed'; }
-    if (p.action === 'key') {
-      const o = { key: p.key, code: p.key, bubbles: true, cancelable: true };
-      const go = el.dispatchEvent(new KeyboardEvent('keydown', o)); el.dispatchEvent(new KeyboardEvent('keyup', o));
-      if (go && p.key === 'Enter' && el.form) el.form.requestSubmit();
-      return 'ok';
-    }
-    return 'unsupported'; })()`;
+// DOM-level input, used when real CDP input can't run: hidden tabs (Input.dispatch* waits for a frame
+// background tabs never produce) and tabs where the debugger is refused. Self-contained: it is serialized into the page.
+function domAction(p) {
+  const dx = p.deltaX || 0, dy = p.deltaY ?? 600;
+  const el = p.selector ? document.querySelector(p.selector) : (p.x != null ? document.elementFromPoint(p.x, p.y) : document.activeElement);
+  if (p.action === 'scroll') {
+    if (p.selector && el) { el.scrollBy(dx, dy); return 'ok'; }
+    const se = document.scrollingElement, before = se.scrollTop;
+    se.scrollBy(dx, dy);
+    if (se.scrollTop !== before || !dy) return 'ok';
+    // App-shell pages (Grafana, GCP console) scroll an inner container, not the window: use the largest scrollable box
+    const box = [...document.querySelectorAll('*')]
+      .filter(e => e.scrollHeight > e.clientHeight + 10 && /(auto|scroll)/.test(getComputedStyle(e).overflowY))
+      .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
+    // Page fits the viewport: a no-op, same as a wheel event would be
+    if (box) box.scrollBy(dx, dy);
+    return 'ok';
+  }
+  if (!el) return 'no element';
+  if (p.action === 'click') { el.scrollIntoView({block:'center'}); el.focus?.(); el.click(); if (p.double) el.dispatchEvent(new MouseEvent('dblclick', {bubbles:true})); return 'ok'; }
+  if (p.action === 'type') { el.focus?.(); return document.execCommand('insertText', false, p.text) ? 'ok' : 'insertText failed'; }
+  if (p.action === 'key') {
+    const o = { key: p.key, code: p.key, bubbles: true, cancelable: true };
+    const go = el.dispatchEvent(new KeyboardEvent('keydown', o)); el.dispatchEvent(new KeyboardEvent('keyup', o));
+    if (go && p.key === 'Enter' && el.form) el.form.requestSubmit();
+    return 'ok';
+  }
+  return 'unsupported';
+}
+
+// debugger.attach refuses any tab holding another extension's frame (e.g. an injected overlay iframe),
+// which kills every CDP tool on that tab; callers fall back to debugger-free APIs
+const isForeignFrameError = e => /URL of different extension/.test(e?.message || '');
+
+// Run a function in the page's main world without the debugger
+async function inPage(tabId, func, args) {
+  const [r] = await withTimeout(chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func, args }), CDP_TIMEOUT_MS, 'executeScript');
+  return r?.result;
+}
+
+// runScript fallback: indirect eval in the page's main world (subject to the page's own CSP)
+async function evalInPage(tabId, code) {
+  try {
+    const r = await inPage(tabId, async (c) => {
+      try { const v = await (0, eval)(c); return { ok: true, s: JSON.stringify(v) ?? 'undefined', t: typeof v }; }
+      catch (err) { return { ok: false, err: String(err) }; }
+    }, [code]);
+    if (!r.ok) return { error: r.err, mode: 'page-eval' };
+    if (r.s.length > SCRIPT_RESULT_CAP) return { result: r.s.slice(0, SCRIPT_RESULT_CAP), truncated: true, type: r.t, mode: 'page-eval' };
+    return { result: r.s === 'undefined' ? undefined : JSON.parse(r.s), type: r.t, mode: 'page-eval' };
+  } catch (e) {
+    return { error: e.message, mode: 'page-eval' };
+  }
 }
 
 async function waitForLoad(tabId, ms = 10000) {
@@ -253,16 +298,27 @@ async function doAction(tabId, p) {
       await sleep(300); await waitForLoad(tabId);
       return { ok: true, url: (await chrome.tabs.get(tabId)).url };
     }
-    await chrome.debugger.attach(target, '1.3');
+    if (p.action === 'back' || p.action === 'forward') {
+      await (p.action === 'back' ? chrome.tabs.goBack(tabId) : chrome.tabs.goForward(tabId));
+      await sleep(300); await waitForLoad(tabId);
+      return { ok: true, url: (await chrome.tabs.get(tabId)).url };
+    }
+    let attached = true;
+    try { await chrome.debugger.attach(target, '1.3'); }
+    catch (e) { if (!isForeignFrameError(e)) throw e; attached = false; }
     if (['click', 'type', 'key', 'scroll'].includes(p.action)) {
-      const vis = await cdp('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true });
-      if (vis.result.value !== 'visible') {
-        const r = await cdp('Runtime.evaluate', { expression: domActionExpr(p), returnByValue: true, userGesture: true });
-        if (r.result.value !== 'ok') return { error: `${p.action} (hidden tab, DOM fallback): ${r.result.value}` };
+      const hidden = !attached || (await cdp('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })).result.value !== 'visible';
+      if (hidden) {
+        const mode = attached ? 'dom-fallback (tab hidden)' : "dom-fallback (debugger blocked by another extension's frame)";
+        const r = attached
+          ? (await cdp('Runtime.evaluate', { expression: `(${domAction})(${JSON.stringify(p)})`, returnByValue: true, userGesture: true })).result.value
+          : await inPage(tabId, domAction, [p]);
+        if (r !== 'ok') return { error: `${p.action} (${mode}): ${r}` };
         await sleep(p.wait ?? 400);
-        return { ok: true, mode: 'dom-fallback (tab hidden)', url: (await chrome.tabs.get(tabId)).url };
+        return { ok: true, mode, url: (await chrome.tabs.get(tabId)).url };
       }
     }
+    if (!attached) return { error: `${p.action} needs the debugger, which is blocked by another extension's frame in this tab` };
     let { x, y } = p;
     if (p.selector) {
       const expr = `(()=>{const e=document.querySelector(${JSON.stringify(p.selector)});if(!e)return null;e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`;
@@ -293,10 +349,6 @@ async function doAction(tabId, p) {
       }
       case 'scroll':
         await mouse('mouseWheel', x ?? 400, y ?? 300, { deltaX: p.deltaX || 0, deltaY: p.deltaY ?? 600 });
-        break;
-      case 'back': case 'forward':
-        await cdp('Runtime.evaluate', { expression: `history.${p.action}()` });
-        await sleep(300); await waitForLoad(tabId);
         break;
       default:
         return { error: `unknown action: ${p.action}` };
