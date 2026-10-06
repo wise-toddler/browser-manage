@@ -13,11 +13,14 @@
     "scripting"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/main.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "preview.html",
     "default_title": "Tab Manager"
   },
-  "host_permissions": ["<all_urls>"]
+  "host_permissions": [
+    "<all_urls>"
+  ]
 }

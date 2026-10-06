@@ -16,18 +16,14 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
               /tmp/tab-manager-registry.json                 memory, suspend
 ```
 
-## Available MCP Tools (16)
+## Available MCP Tools
 
 | Tool | Description | Backend |
 |------|-------------|---------|
 | **Tab Management** | | |
-| `browser_list_tabs` | List all tabs with titles/URLs | AppleScript |
 | `browser_get_tabs_ext` | Get tabs with Chrome IDs (supports `--profile`) | Extension |
-| `browser_close_tabs` | Close tabs by URL pattern or indices | AppleScript |
 | `browser_close_duplicates` | Close all duplicate tabs + new tab pages | Extension |
 | `browser_create_group` | Create named/colored tab groups | Extension |
-| `browser_count_windows` | Count browser windows | AppleScript |
-| `browser_suggest_cleanup` | Analyze and suggest tab cleanup | AppleScript |
 | **Memory** | | |
 | `browser_get_memory` | Per-tab JS heap via Debugger API + hog detection | Extension |
 | **Time Tracking** | | |
@@ -101,18 +97,21 @@ Auto-detects the Great Suspender extension (any version/fork) by scanning instal
 
 ```
 browser-manage/
-├── extension/
-│   ├── manifest.json        # Manifest V3 (tabs, tabGroups, debugger, storage, management)
-│   ├── background.js        # Service worker - all tab/memory/suspend logic
-│   ├── preview.html         # Popup UI for change preview
-│   └── preview.js           # Popup logic
-├── native-host/
-│   ├── host.py              # Native messaging host (per-profile IPC + registry)
-│   ├── install.sh           # Installer script
-│   └── com.tabmanager.host.json
+├── extension/                 # Edge/Chrome extension (MV3, module service worker)
+│   ├── manifest.json
+│   ├── src/main.js            # native port + the single action registry (native + popup)
+│   ├── src/cdp.js             # shared debugger sessions (refcounted, idle detach, pin)
+│   ├── src/page.js            # self-contained in-page functions (serialized into tabs)
+│   ├── src/{actions,capture,script,tabs,suspend,triage,tracking,util}.js
+│   ├── preview.html/js        # popup
+│   └── *.test.js / *.test.mjs # node tests, no deps
+├── native-host/host.py        # native messaging <-> Unix socket (/tmp/tab-manager-<profile>.sock)
 └── mcp-server/
-    ├── server.py            # MCP server (16 tools)
-    └── pyproject.toml       # Python project config
+    ├── server.py              # thin: lists/dispatches from the tool registry
+    ├── ipc.py                 # profile registry + socket transport (file IPC fallback)
+    ├── tools/                 # @tool modules: tabs, profiles, learning, script, capture, actions, triage
+    ├── analysis.py            # cleanup categories, PR status, dispose classifier
+    └── tests/test_host_ipc.py
 ```
 
 ## Debug

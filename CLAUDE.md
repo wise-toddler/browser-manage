@@ -45,21 +45,29 @@ You are Shivansh's browser manager assistant. You manage his tabs and develop th
 ### Architecture
 ```
 browser-manage/
-├── extension/          # Chrome/Edge extension (Manifest V3)
-│   ├── manifest.json   # Permissions: tabs, tabGroups, nativeMessaging
-│   ├── background.js   # Service worker - handles commands
-│   └── preview.html/js # Popup UI for previewing changes
-├── mcp-server/         # MCP server (Python)
-│   └── server.py       # Tools exposed to Claude
-└── native-host/        # Native messaging bridge
-    └── host.py         # Connects extension <-> MCP server
+├── extension/                 # Edge/Chrome extension (MV3, module service worker)
+│   ├── manifest.json
+│   ├── src/main.js            # native port + the single action registry (native + popup)
+│   ├── src/cdp.js             # shared debugger sessions (refcounted, idle detach, pin)
+│   ├── src/page.js            # self-contained in-page functions (serialized into tabs)
+│   ├── src/{actions,capture,script,tabs,suspend,triage,tracking,util}.js
+│   ├── preview.html/js        # popup
+│   └── *.test.js / *.test.mjs # node tests, no deps
+├── native-host/host.py        # native messaging <-> Unix socket (/tmp/tab-manager-<profile>.sock)
+└── mcp-server/
+    ├── server.py              # thin: lists/dispatches from the tool registry
+    ├── ipc.py                 # profile registry + socket transport (file IPC fallback)
+    ├── tools/                 # @tool modules: tabs, profiles, learning, script, capture, actions, triage
+    ├── analysis.py            # cleanup categories, PR status, dispose classifier
+    └── tests/test_host_ipc.py
 ```
 
 ### Adding New Features
-1. Add action handler in `background.js`
-2. Add tool definition in `server.py` `list_tools()`
-3. Add tool handler in `server.py` `call_tool()`
-4. Test with MCP inspector or Claude
+1. Add the handler to the right `extension/src/*.js` module and register it in `ACTIONS` (`src/main.js`)
+2. Add a `@tool` in the matching `mcp-server/tools/*.py` (schema + handler in one place)
+3. Run `node extension/registry.test.mjs`, `node extension/cdp.test.mjs`, `uv run python3 mcp-server/tests/test_host_ipc.py`
+4. Load new code with `browser_reload_extension`, test live in **background tabs of the personal profile only** (never activate)
+5. Focus-changing actions require `allow_focus=true`; don't add new ones without that gate
 
 ### Code Style
 - Keep changes minimal
