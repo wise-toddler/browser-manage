@@ -13,7 +13,12 @@ import tools.learning  # noqa: F401
 import tools.script  # noqa: F401
 import tools.capture  # noqa: F401
 import tools.actions  # noqa: F401
+import tools.page  # noqa: F401
 import tools.triage  # noqa: F401
+# P2 debug
+import tools.debug  # noqa: F401
+import tools.batch  # noqa: F401
+import tools.record  # noqa: F401
 from tools import REGISTRY, dispatch
 # Re-exported for bm.py and ad-hoc scripts that `import server`
 from ipc import send_extension_command, get_active_profiles  # noqa: F401

@@ -10,7 +10,11 @@ from ipc import send_extension_command
 from tools import tool, schema, text
 
 
-def screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "jpeg", path: str = None) -> list:
+# Called after every successful capture as fn(tab_id, profile, result, label, at); recording subscribes here
+FRAME_LISTENERS = []
+
+
+def screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "jpeg", path: str = None, label: str = "screenshot", at: dict = None) -> list:
     """Capture a tab via the extension; return ImageContent + saved path (or an error TextContent)."""
     result = send_extension_command("screenshot", {"tabId": tab_id, "fullPage": full_page, "format": fmt}, timeout=30, profile=profile)
     if not isinstance(result, dict) or "error" in result or not result.get("data"):
@@ -18,6 +22,8 @@ def screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "j
     path = path or f"/tmp/tab-manager-shot-{tab_id}-{int(time.time())}.{'jpg' if fmt == 'jpeg' else 'png'}"
     with open(path, "wb") as f:
         f.write(base64.b64decode(result["data"]))
+    for listener in FRAME_LISTENERS:
+        listener(tab_id, profile, result, label, at)
     return [
         ImageContent(type="image", data=result["data"], mimeType=f"image/{fmt}"),
         text(f"Saved {path} ({os.path.getsize(path) // 1024} KB, {'full page' if result.get('fullPage') else 'viewport'}{', ' + result['mode'] if result.get('mode') else ''}{', truncated to 8000px of ' + str(result['pageHeight']) if result.get('truncated') else ''})"),

@@ -4,6 +4,7 @@ import math
 import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, unquote
 
 
@@ -29,21 +30,43 @@ KEEP_DOMAINS = [
 ]
 
 
-def check_pr_status(url: str) -> str:
-    """Check if a GitHub PR is merged/closed/open via gh CLI."""
+PR_STATE_TTL_S = 600
+_pr_state_cache = {}  # 'owner/repo/pull/N' -> (state, fetched_at); merged/closed are final, open is rechecked after the TTL
+
+
+def _pr_slug(url: str):
+    """'owner/repo/pull/N' for a GitHub PR URL, else None."""
     match = re.search(r'github\.com/([^/]+/[^/]+)/pull/(\d+)', url)
-    if not match:
+    return f"{match.group(1)}/pull/{match.group(2)}" if match else None
+
+
+def check_pr_status(url: str) -> str:
+    """Check if a GitHub PR is merged/closed/open via gh CLI (cached per PR)."""
+    slug = _pr_slug(url)
+    if not slug:
         return 'unknown'
-    repo, number = match.group(1), match.group(2)
+    cached = _pr_state_cache.get(slug)
+    if cached and (cached[0] in ('merged', 'closed') or time.time() - cached[1] < PR_STATE_TTL_S):
+        return cached[0]
     try:
         result = subprocess.run(
-            ['gh', 'pr', 'view', f'https://github.com/{repo}/pull/{number}',
+            ['gh', 'pr', 'view', f'https://github.com/{slug}',
              '--json', 'state', '-q', '.state'],
             capture_output=True, text=True, timeout=10
         )
-        return result.stdout.strip().lower() or 'unknown'
+        state = result.stdout.strip().lower() or 'unknown'
     except Exception:
         return 'unknown'
+    if state != 'unknown':
+        _pr_state_cache[slug] = (state, time.time())
+    return state
+
+
+def prefetch_pr_statuses(urls) -> None:
+    """Warm the PR state cache: one gh call per unique PR, in parallel (sequential gh calls are ~0.7s each)."""
+    slugs = {s: u for u in urls if (s := _pr_slug(u))}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(check_pr_status, slugs.values()))
 
 
 # --- Data-driven prediction (nearest-centroid classifier) ---
@@ -205,6 +228,10 @@ def categorize_tabs(tabs: list, check_prs: bool = True) -> dict:
         'duplicates': [],      # close extras
         'keep': [],            # remaining
     }
+
+    if check_prs:
+        # Ungrouped PR tabs are the ones the loop below checks; fetch them all up front
+        prefetch_pr_statuses(t.get('url', '') for t in tabs if t.get('groupId', -1) == -1 and '/pull/' in t.get('url', ''))
 
     seen_urls = {}
     for t in tabs:

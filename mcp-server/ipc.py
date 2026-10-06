@@ -71,11 +71,14 @@ def _send_to_socket(path: str, action: str, payload: dict, timeout: int) -> dict
         s.sendall(json.dumps({"id": rid, "action": action, "payload": payload}).encode('utf-8') + b'\n')
         buf = bytearray()
         try:
-            while b'\n' not in buf:
+            while True:
                 chunk = s.recv(1 << 20)
                 if not chunk:
                     return {"error": "native host closed the connection"}
                 buf.extend(chunk)
+                # Only the new chunk can hold the terminator; rescanning the whole buffer is quadratic on big screenshots
+                if b'\n' in chunk:
+                    break
         except socket.timeout:
             return {"error": TIMEOUT_ERROR}
     resp = json.loads(bytes(buf).split(b'\n', 1)[0])

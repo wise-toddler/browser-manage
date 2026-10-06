@@ -23,6 +23,7 @@ sys.path.insert(0, SERVER_DIR)
 
 import ipc  # noqa: E402
 import server  # noqa: E402
+import tools.record  # noqa: E402
 
 PROFILE = "edge-testprof"
 TINY_JPEG = base64.b64encode(b"\xff\xd8\xff\xd9").decode()
@@ -43,6 +44,13 @@ def fake_result(action, payload):
         "action": {"ok": True, "url": "https://example.com/"},
         "triageTabs": {"triaged": 1},
         "reloadExtension": {"reloading": True},
+        "readConsole": {"total": 0, "matched": 0, "messages": []},
+        "readNetwork": {"total": 0, "matched": 0, "requests": []},
+        "readPage": {"url": "https://example.com/", "title": "Example", "tree": 'link "More" [ref=1]', "nodes": 1, "scroll": {}},
+        "findInPage": {"matches": ['link "More" [ref=1]'], "total": 1},
+        "getPageText": {"text": "Example Domain", "chars": 14},
+        "waitFor": {"ok": True, "matched": "selector", "ms": 0},
+        "uploadFiles": {"ok": True, "files": 1, "mode": "cdp"},
     }.get(action, {"ok": True})
 
 
@@ -134,7 +142,7 @@ def main():
     print("PASS file-IPC fallback (no sock, and sock path missing)")
 
     names = [t.name for t in asyncio.run(server.list_tools())]
-    assert len(names) == 28, len(names)
+    assert len(names) == 38, len(names)  # 28 from P0 + 5 page (P1) + 5 debug/batch/record (P2)
     shot = os.path.join(TMP, "shot.jpg")
     args = {
         "browser_create_group": {"name": "G", "tab_ids": [1]}, "browser_suspend_tabs": {"tab_ids": [1]},
@@ -144,12 +152,17 @@ def main():
         "browser_run_script": {"tab_id": 1, "code": "1"}, "browser_screenshot": {"tab_id": 1, "path": shot},
         "browser_action": {"tab_id": 1, "action": "scroll", "screenshot": False},
         "browser_triage_tabs": {"tab_ids": [1]}, "browser_restore_from_triage": {"tab_ids": [1]},
+        "browser_debug": {"tab_id": 1}, "browser_read_console": {"tab_id": 1}, "browser_read_network": {"tab_id": 1},
+        "browser_batch": {"actions": [{"tool": "browser_get_tabs_ext", "args": {}}]}, "browser_record": {"tab_id": 1, "action": "start"},
+        "browser_read_page": {"tab_id": 1}, "browser_find": {"tab_id": 1, "query": "more"}, "browser_get_page_text": {"tab_id": 1},
+        "browser_wait_for": {"tab_id": 1, "selector": "a", "timeout_ms": 1000}, "browser_upload": {"tab_id": 1, "selector": "input", "paths": [__file__]},
     }
     for n in names:
         out = asyncio.run(server.call_tool(n, {"profile": PROFILE, **args.get(n, {})}))
         assert isinstance(out, list) and out, (n, out)
         bad = [c.text for c in out if getattr(c, "text", "").startswith(("Error", "Unknown tool", "Screenshot error"))]
         assert not bad, (n, bad)
+    tools.record._discard(1)
     print(f"PASS all {len(names)} tools dispatch through the registry")
 
     ext.proc.stdin.close()

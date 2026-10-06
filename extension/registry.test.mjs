@@ -30,7 +30,7 @@ globalThis.chrome = {
     update: async (id, props) => { calls.push(['windows.update', id, props]); },
   },
   alarms: { create() {}, onAlarm: listener() },
-  debugger: { onDetach: listener() },
+  debugger: { onDetach: listener(), onEvent: listener() },
   tabGroups: { query: async () => [] },
 };
 
@@ -81,5 +81,8 @@ assert.strictEqual(focusCalls().length, 0, 'agent restore must not focus');
 calls.length = 0;
 await dispatch('restoreFromTriage', { tabIds: [3] }, popup);
 assert.strictEqual(focusCalls().length, 2);
+
+// P1 page actions
+for (const a of ['readPage', 'findInPage', 'getPageText', 'waitFor', 'uploadFiles']) assert(typeof ACTIONS[a] === 'function', `missing action ${a}`);
 
 console.log(`registry OK (${Object.keys(ACTIONS).length} actions, focus gate enforced)`);

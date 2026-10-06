@@ -2,6 +2,7 @@
 import { withDebugger, inPage } from './cdp.js';
 import { domAction, selectorCenter } from './page.js';
 import { sleep, isForeignFrameError, focusBlocked } from './util.js';
+import { refSelector } from './read.js';
 
 const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, PageUp: 33, PageDown: 34, ' ': 32 };
 const INPUT_ACTIONS = ['click', 'type', 'key', 'scroll'];
@@ -27,24 +28,30 @@ async function cdpAction(tabId, p, cmd) {
     if (vis !== 'visible') {
       const mode = 'dom-fallback (tab hidden)';
       const r = (await cmd('Runtime.evaluate', { expression: `(${domAction})(${JSON.stringify(p)})`, returnByValue: true, userGesture: true })).result.value;
-      if (r !== 'ok') return { error: `${p.action} (${mode}): ${r}` };
+      if (r !== 'ok') return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
       return settled(tabId, p, { mode });
     }
   }
+  // type/key go to the focused element, so a target given by selector/ref gets focus first
+  if ((p.action === 'type' || p.action === 'key') && p.selector) {
+    const f = (await cmd('Runtime.evaluate', { expression: `(${domAction})(${JSON.stringify({ action: 'focus', selector: p.selector })})`, returnByValue: true })).result.value;
+    if (f !== 'ok') return { error: notFound(p) };
+  }
   let { x, y } = p;
-  if (p.selector) {
+  if (p.selector && p.action !== 'type' && p.action !== 'key') {
     const r = await cmd('Runtime.evaluate', { expression: `(${selectorCenter})(${JSON.stringify(p.selector)})`, returnByValue: true });
-    if (!r.result.value) return { error: `selector not found: ${p.selector}` };
+    if (!r.result.value) return { error: notFound(p) };
     ({ x, y } = r.result.value);
   }
   switch (p.action) {
     case 'click': {
-      if (x == null || y == null) return { error: 'click needs x,y or selector' };
+      if (x == null || y == null) return { error: 'click needs x,y, selector or ref' };
       const button = p.button || 'left', clickCount = p.double ? 2 : 1;
       await mouse('mouseMoved', x, y);
       await mouse('mousePressed', x, y, { button, clickCount });
       await mouse('mouseReleased', x, y, { button, clickCount });
-      break;
+      // Viewport CSS px of the click, for recordings to mark where it landed
+      return settled(tabId, p, { at: { x: Math.round(x), y: Math.round(y) } });
     }
     case 'type':
       if (typeof p.text !== 'string') return { error: 'type needs text' };
@@ -67,8 +74,15 @@ async function cdpAction(tabId, p, cmd) {
   return settled(tabId, p);
 }
 
+const notFound = p => (p.ref != null ? `ref ${p.ref} not found (page changed? read the page again)` : `selector not found: ${p.selector}`);
+
 export async function doAction(tabId, p, ctx) {
   if (typeof tabId !== 'number') return { error: 'tabId (number) required' };
+  if (p.ref != null) {
+    const selector = refSelector(p.ref);
+    if (!selector) return { error: `bad ref: ${p.ref}` };
+    p = { ...p, selector };
+  }
   try {
     if (p.action === 'activate') {
       const blocked = focusBlocked(p, ctx, 'activate');
@@ -101,7 +115,7 @@ export async function doAction(tabId, p, ctx) {
   const mode = "dom-fallback (debugger blocked by another extension's frame)";
   try {
     const r = await inPage(tabId, domAction, [p]);
-    if (r !== 'ok') return { error: `${p.action} (${mode}): ${r}` };
+    if (r !== 'ok') return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
     return await settled(tabId, p, { mode });
   } catch (e) {
     return { error: e.message };
