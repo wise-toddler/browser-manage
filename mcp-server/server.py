@@ -173,7 +173,7 @@ def _screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "
         f.write(base64.b64decode(result["data"]))
     return [
         ImageContent(type="image", data=result["data"], mimeType=f"image/{fmt}"),
-        TextContent(type="text", text=f"Saved {path} ({os.path.getsize(path) // 1024} KB, {'full page' if result.get('fullPage') else 'viewport'}{', ' + result['mode'] if result.get('mode') else ''})"),
+        TextContent(type="text", text=f"Saved {path} ({os.path.getsize(path) // 1024} KB, {'full page' if result.get('fullPage') else 'viewport'}{', ' + result['mode'] if result.get('mode') else ''}{', truncated to 8000px of ' + str(result['pageHeight']) if result.get('truncated') else ''})"),
     ]
 
 
