@@ -176,22 +176,57 @@ async function runScript(tabId, code) {
   return out;
 }
 
+const OFFSCREEN_SHOT_TIMEOUT_MS = 20000;
+const FULL_PAGE_MAX_HEIGHT = 8000;
+
+// Self-contained (serialized into the page): remember every non-zero scroll position, and put them back
+function saveScroll() {
+  const s = [];
+  for (const e of document.querySelectorAll('*')) if (e.scrollTop || e.scrollLeft) s.push([e, e.scrollTop, e.scrollLeft]);
+  window.__bmScroll = { s, x: scrollX, y: scrollY };
+}
+function restoreScroll() {
+  const b = window.__bmScroll;
+  if (!b) return;
+  for (const [e, t, l] of b.s) { e.scrollTop = t; e.scrollLeft = l; }
+  scrollTo(b.x, b.y);
+  delete window.__bmScroll;
+}
+
 // Screenshot via debugger so background tabs work without activating them
 async function screenshotTab(tabId, { fullPage = false, format = 'jpeg', quality = 85 } = {}) {
   if (typeof tabId !== 'number') return { error: 'tabId (number) required' };
   const target = { tabId };
   try {
     await chrome.debugger.attach(target, '1.3');
-    const cdp = (m, a) => withTimeout(chrome.debugger.sendCommand(target, m, a), CDP_TIMEOUT_MS, m);
-    // Always render offscreen with an explicit clip: a plain capture waits for a compositor
-    // frame, which hidden/background tabs never produce, so it would hang
-    const { cssContentSize: c, cssVisualViewport: v } = await cdp('Page.getLayoutMetrics');
-    const clip = fullPage
-      ? { x: 0, y: 0, width: c.width, height: c.height, scale: 1 }
-      : { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: 1 };
-    const params = { format, clip, captureBeyondViewport: true, ...(format === 'jpeg' ? { quality } : {}) };
-    const { data } = await cdp('Page.captureScreenshot', params);
-    return { data, format, fullPage };
+    const cdp = (m, a, ms = CDP_TIMEOUT_MS) => withTimeout(chrome.debugger.sendCommand(target, m, a), ms, m);
+    const q = format === 'jpeg' ? { quality } : {};
+    const vis = (await cdp('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })).result.value;
+    if (vis === 'visible' && !fullPage) {
+      // Visible tab: grab the composited frame as-is. No clip/captureBeyondViewport means no viewport
+      // emulation, so it's fast on long pages and never touches scroll positions
+      const { data } = await cdp('Page.captureScreenshot', { format, ...q });
+      return { data, format, fullPage: false };
+    }
+    // Hidden tab (it never produces a frame, so a plain capture hangs) or full page: render offscreen.
+    // That temporarily resizes the viewport, which clamps 100vh app-shell scrollers (Grafana, GCP) to the
+    // top, so every scroll position is saved first and put back afterwards
+    await cdp('Runtime.evaluate', { expression: `(${saveScroll})()` });
+    try {
+      const { cssContentSize: c, cssVisualViewport: v } = await cdp('Page.getLayoutMetrics');
+      // Past ~8k CSS px (16k device px at 2x) the GPU texture limit makes capture fail, and the image is 10MB+ anyway
+      const truncated = fullPage && c.height > FULL_PAGE_MAX_HEIGHT;
+      const clip = fullPage
+        ? { x: 0, y: 0, width: c.width, height: Math.min(c.height, FULL_PAGE_MAX_HEIGHT), scale: 1 }
+        : { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: 1 };
+      // Offscreen capture renders the whole page even with a viewport clip, so long pages need more time
+      const { data } = await cdp('Page.captureScreenshot', { format, clip, captureBeyondViewport: true, ...q }, OFFSCREEN_SHOT_TIMEOUT_MS);
+      return { data, format, fullPage, ...(truncated ? { truncated: true, pageHeight: Math.round(c.height) } : {}) };
+    } finally {
+      // Let the viewport return to its real size first, or the restore lands on the enlarged layout
+      await sleep(150);
+      try { await cdp('Runtime.evaluate', { expression: `(${restoreScroll})()` }); } catch {}
+    }
   } catch (e) {
     if (!isForeignFrameError(e)) return { error: e.message };
     // Debugger refused: capture what the window shows. Only works for the visible active tab, viewport only
