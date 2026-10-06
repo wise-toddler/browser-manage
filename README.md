@@ -37,6 +37,25 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
 | **Multi-Profile** | | |
 | `browser_list_profiles` | List all connected browser profiles | Registry |
 | `browser_search_all_tabs` | Search tabs across all profiles | Extension |
+| **Page automation** (background tabs, no focus) | | |
+| `browser_read_page` | Role/name tree with stable `[ref=N]` | Extension |
+| `browser_find` | Elements matching words, with refs | Extension |
+| `browser_get_page_text` | Readable text (article/main/body) | Extension |
+| `browser_action` | click/type/key/scroll/navigate/back/forward by ref, selector or x,y | Extension |
+| `browser_wait_for` | Wait for selector/ref/text/URL (or gone) | Extension |
+| `browser_upload` | Set files on `<input type=file>` | Extension |
+| `browser_run_script` | JS in page context, logged | Extension |
+| `browser_screenshot` | Viewport or full page, hidden tabs too | Extension |
+| `browser_open_tabs` | Open URLs, optionally into a group | Extension |
+| **Debugging** | | |
+| `browser_debug` | Start/stop console + network capture (infobar shows while on) | Extension |
+| `browser_read_console` / `browser_read_network` | Read captured logs / requests, response bodies | Extension |
+| **Orchestration** | | |
+| `browser_batch` | Run several tool calls in one round trip | Server |
+| `browser_record` | Record screenshots of a tab's actions, export GIF | Server |
+| `browser_reload_extension` | Reload extension code from disk | Extension |
+
+Focus-changing calls (`activate`, `restore_from_triage`, `open_tabs active=true`) need `allow_focus=true`.
 
 All extension-based tools accept an optional `--profile` parameter to target a specific browser profile.
 

@@ -1,5 +1,5 @@
 // --- Screenshots via the debugger, so background tabs work without activating them ---
-import { withDebugger } from './cdp.js';
+import { withDebugger, inPage } from './cdp.js';
 import { saveScroll, restoreScroll } from './page.js';
 import { isForeignFrameError, sleep } from './util.js';
 
@@ -11,12 +11,13 @@ export async function screenshotTab(tabId, { fullPage = false, format = 'jpeg', 
   try {
     return await withDebugger(tabId, async (cmd) => {
       const q = format === 'jpeg' ? { quality } : {};
-      const vis = (await cmd('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })).result.value;
+      // dpr: image px per CSS px, so callers (recordings) can map viewport coordinates onto the image
+      const { vis, dpr } = (await cmd('Runtime.evaluate', { expression: '({ vis: document.visibilityState, dpr: devicePixelRatio })', returnByValue: true })).result.value;
       if (vis === 'visible' && !fullPage) {
         // Visible tab: grab the composited frame as-is. No clip/captureBeyondViewport means no viewport
         // emulation, so it's fast on long pages and never touches scroll positions
         const { data } = await cmd('Page.captureScreenshot', { format, ...q });
-        return { data, format, fullPage: false };
+        return { data, format, fullPage: false, dpr };
       }
       // Hidden tab (it never produces a frame, so a plain capture hangs) or full page: render offscreen.
       // That temporarily resizes the viewport, which clamps 100vh app-shell scrollers (Grafana, GCP) to the
@@ -31,7 +32,7 @@ export async function screenshotTab(tabId, { fullPage = false, format = 'jpeg', 
           : { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: 1 };
         // Offscreen capture renders the whole page even with a viewport clip, so long pages need more time
         const { data } = await cmd('Page.captureScreenshot', { format, clip, captureBeyondViewport: true, ...q }, OFFSCREEN_SHOT_TIMEOUT_MS);
-        return { data, format, fullPage, ...(truncated ? { truncated: true, pageHeight: Math.round(c.height) } : {}) };
+        return { data, format, fullPage, dpr, ...(truncated ? { truncated: true, pageHeight: Math.round(c.height) } : {}) };
       } finally {
         // Let the viewport return to its real size first, or the restore lands on the enlarged layout
         await sleep(150);
@@ -47,6 +48,7 @@ export async function screenshotTab(tabId, { fullPage = false, format = 'jpeg', 
       return { error: "Debugger blocked by another extension's frame in this tab, so the only capture path is the visible window. The tab must be visible; bringing it to front takes focus of the user's window and needs browser_action action=activate with allow_focus=true." };
     }
     const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format, ...(format === 'jpeg' ? { quality } : {}) });
-    return { data: url.split(',')[1], format, fullPage: false, mode: `captureVisibleTab${fullPage ? ' (full_page unsupported here, viewport only)' : ''}` };
+    const dpr = await inPage(tabId, () => devicePixelRatio).catch(() => undefined);
+    return { data: url.split(',')[1], format, fullPage: false, dpr, mode: `captureVisibleTab${fullPage ? ' (full_page unsupported here, viewport only)' : ''}` };
   }
 }

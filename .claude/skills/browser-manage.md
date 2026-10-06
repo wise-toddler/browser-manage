@@ -33,6 +33,13 @@ Manage tabs across all connected Chrome and Edge profiles via the `browser-manag
 - `browser_list_profiles` — list all connected browser profiles
 - `browser_search_all_tabs` — search tabs across all profiles by query
 
+### Page automation (works on background tabs, never takes focus)
+- `browser_read_page` → refs, then `browser_action(ref=…)`, `browser_upload(ref=…)`, `browser_wait_for(ref|selector|text|url_contains)`
+- `browser_find(query)`, `browser_get_page_text`, `browser_run_script`, `browser_screenshot`
+- `browser_debug` + `browser_read_console` / `browser_read_network` for debugging
+- `browser_batch` to chain steps, `browser_record` start → actions → export GIF
+- Never pass `allow_focus=true` unless the user asked for a visible tab
+
 ## Usage via mcp-call
 
 ```bash

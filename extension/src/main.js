@@ -12,6 +12,10 @@ import { triageTabs, restoreFromTriage, listTriageTabs } from './triage.js';
 import {
   getTabTracking, getTabActivity, getStaleTabs, getDecisionLog, getDomainStats, recordCleanupResult, runCheckpoint,
 } from './tracking.js';
+// P2 debug
+import { debugCapture, readConsole, readNetwork } from './debug.js';
+// P1 page
+import { readPage, findInPage, getPageText, waitFor, uploadFiles } from './read.js';
 
 const NATIVE_HOST = 'com.tabmanager.host';
 let port = null;
@@ -54,6 +58,16 @@ export const ACTIONS = {
     setTimeout(() => chrome.runtime.reload(), 200);
     return { reloading: true };
   },
+  // P1 page
+  readPage: p => readPage(p.tabId, p),
+  findInPage: p => findInPage(p.tabId, p.query),
+  getPageText: p => getPageText(p.tabId, p.maxChars),
+  waitFor: p => waitFor(p.tabId, p),
+  uploadFiles: p => uploadFiles(p.tabId, p),
+  // P2 debug
+  debugCapture: p => debugCapture(p.tabId, p),
+  readConsole: p => readConsole(p.tabId, p),
+  readNetwork: p => readNetwork(p.tabId, p),
 
   // popup / extension pages
   getPendingChanges: () => getPendingChanges(),

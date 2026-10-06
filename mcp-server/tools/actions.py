@@ -7,11 +7,12 @@ from tools import tool, schema, text
 from tools.capture import screenshot
 
 
-@tool("browser_action", "Act in a tab with real mouse/keyboard events: click (x,y or selector), type text, press key, scroll, navigate, back/forward, activate. activate steals the user's window focus and needs allow_focus=true. Returns a screenshot after the action unless screenshot=false.", schema({
+@tool("browser_action", "Act in a tab with real mouse/keyboard events: click (x,y, selector or ref), type text, press key, scroll, navigate, back/forward, activate. activate steals the user's window focus and needs allow_focus=true. Returns a screenshot after the action unless screenshot=false.", schema({
     "tab_id": {"type": "integer"},
     "action": {"type": "string", "enum": ["click", "type", "key", "scroll", "navigate", "back", "forward", "activate"]},
     "x": {"type": "number"}, "y": {"type": "number"},
     "selector": {"type": "string", "description": "CSS selector; scrolled into view, its center is used as x,y"},
+    "ref": {"type": ["string", "integer"], "description": "Element ref from browser_read_page / browser_find; used like selector"},
     "text": {"type": "string", "description": "for type"},
     "key": {"type": "string", "description": "for key: Enter, Tab, Escape, Backspace, ArrowDown, ... or a single character"},
     "url": {"type": "string", "description": "for navigate"},
@@ -33,5 +34,27 @@ async def browser_action(args):
         return [text(f"Error: {result.get('error', result) if isinstance(result, dict) else result}")]
     out = [text(json.dumps(result))]
     if args.get("screenshot", True) and args["action"] != "activate":
-        out = screenshot(tab_id, profile) + out
+        out = screenshot(tab_id, profile, label=_label(args), at=result.get("at")) + out
     return out
+
+
+def _label(args) -> str:
+    """Short caption for a recorded frame, e.g. 'click ref 12', "type 'hello'", 'key Enter'."""
+    a = args.get("action", "")
+    if args.get("ref") is not None:
+        target = f"ref {args['ref']}"
+    elif args.get("selector"):
+        target = args["selector"]
+    elif a == "type":
+        target = repr(args.get("text", ""))
+    elif a == "key":
+        target = args.get("key", "")
+    elif a == "navigate":
+        target = args.get("url", "")
+    elif a == "scroll":
+        target = f"{args.get('deltaY', 600)}px"
+    elif args.get("x") is not None:
+        target = f"({args['x']}, {args.get('y')})"
+    else:
+        target = ""
+    return f"{a} {target}".strip()[:80]
