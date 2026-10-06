@@ -11,12 +11,10 @@ Manage tabs across all connected Chrome and Edge profiles via the `browser-manag
 
 ### Tab Management
 - `browser_get_tabs_ext` — list all tabs (via extension, supports `--profile`)
-- `browser_list_tabs` — list tabs (AppleScript fallback, supports `--browser`)
-- `browser_close_tabs` — close tabs matching URL pattern
+- `browser_close_by_ids` — close tabs by ID
 - `browser_close_duplicates` — find and close duplicate tabs
 - `browser_create_group` — group tabs with name and color
-- `browser_suggest_cleanup` — get AI cleanup suggestions
-- `browser_count_windows` — count browser windows
+- `browser_smart_cleanup` — categorize tabs (merged PRs, sign-in, search, dupes) + predictions
 
 ### Memory
 - `browser_get_memory` — per-tab JS heap memory via Chrome Debugger API, flags hogs (URL pattern + >100MB)
@@ -50,7 +48,7 @@ mcp-call browser-manage browser_suspend_whitelist --action=list
 
 1. `browser_list_profiles` — see connected profiles
 2. `browser_get_stale_tabs` — find idle tabs
-3. `browser_suggest_cleanup` — get suggestions
+3. `browser_smart_cleanup` — get suggestions
 4. Confirm with user before closing
 5. `browser_get_memory` — check memory hogs
 6. `browser_suspend_tabs` — suspend heavy tabs instead of closing

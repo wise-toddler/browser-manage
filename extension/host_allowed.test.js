@@ -1,9 +1,9 @@
 // Run: node extension/host_allowed.test.js
-// Pulls the real hostAllowed out of background.js (a non-module service worker, so no exports).
+// Pulls the real hostAllowed out of src/script.js (an ES module that touches chrome.* on import, so read the source).
 const assert = require('assert');
-const src = require('fs').readFileSync(__dirname + '/background.js', 'utf8');
+const src = require('fs').readFileSync(__dirname + '/src/script.js', 'utf8');
 const m = src.match(/function hostAllowed\(host, list\) \{[\s\S]*?\n\}/);
-assert(m, 'hostAllowed not found in background.js');
+assert(m, 'hostAllowed not found in src/script.js');
 const hostAllowed = eval(`(${m[0]})`);
 
 const list = ['github.com', 'localhost'];
