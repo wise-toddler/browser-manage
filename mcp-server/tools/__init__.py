@@ -13,6 +13,8 @@ PROFILE_PROP = {
         "description": "Target browser profile (e.g. 'edge-kgofki...'). Omit for default.",
     }
 }
+# List-of-tab-IDs schema shared by tab tools
+TAB_IDS = {"type": "array", "items": {"type": "integer"}}
 
 
 @dataclass
@@ -59,11 +61,24 @@ def as_json(obj, indent=2) -> list:
     return [text(json.dumps(obj, indent=indent))]
 
 
-def ext_result(result) -> list:
-    """Return extension result as TextContent."""
+def ext_error(result, expect: type = object) -> str | None:
+    """'Error: ...' text when an extension call returned {error} or not an `expect` instance, else None."""
     if isinstance(result, dict) and "error" in result:
-        return [text(f"Error: {result['error']}. Is the extension running?")]
-    return as_json(result)
+        return f"Error: {result['error']}"
+    if not isinstance(result, expect):
+        return f"Error: unexpected result: {result}"
+    return None
+
+
+def tab_id_error(args: dict) -> str | None:
+    """'Error: ...' text when args has no integer tab_id, else None."""
+    return None if isinstance(args.get("tab_id"), int) else "Error: tab_id (integer) is required"
+
+
+def ext_result(result) -> list:
+    """Return extension result as JSON, or its error text."""
+    err = ext_error(result)
+    return [text(err)] if err else as_json(result)
 
 
 def unwrap(value, kind):

@@ -3,7 +3,7 @@
 import json
 
 from ipc import send_extension_command
-from tools import tool, schema, text
+from tools import tool, schema, text, ext_error, tab_id_error
 from tools.capture import screenshot
 
 
@@ -25,13 +25,13 @@ from tools.capture import screenshot
 }, ["tab_id", "action"]))
 async def browser_action(args):
     tab_id, profile = args.get("tab_id"), args.get("profile")
-    if not isinstance(tab_id, int):
-        return [text("Error: tab_id (integer) is required")]
+    if (err := tab_id_error(args)):
+        return [text(err)]
     payload = {k: v for k, v in args.items() if k not in ("tab_id", "profile", "screenshot", "allow_focus")}
     payload["allowFocus"] = args.get("allow_focus", False)
     result = send_extension_command("action", {"tabId": tab_id, **payload}, timeout=30, profile=profile)
-    if not isinstance(result, dict) or "error" in result:
-        return [text(f"Error: {result.get('error', result) if isinstance(result, dict) else result}")]
+    if (err := ext_error(result, dict)):
+        return [text(err)]
     out = [text(json.dumps(result))]
     if args.get("screenshot", True) and args["action"] != "activate":
         out = screenshot(tab_id, profile, label=_label(args), at=result.get("at")) + out

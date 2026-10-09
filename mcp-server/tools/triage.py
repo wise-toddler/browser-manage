@@ -3,10 +3,8 @@
 import json
 
 from ipc import send_extension_command
-from tools import tool, schema, text, as_json
+from tools import tool, schema, text, as_json, ext_error, TAB_IDS
 from tools.learning import learning_data, predict_tabs
-
-TAB_IDS = {"type": "array", "items": {"type": "integer"}}
 
 
 @tool("browser_triage_tabs", "Move tabs to triage window (suspend + move). User reviews them later to keep or close.", schema({
@@ -36,8 +34,8 @@ async def list_triage(args):
 async def triage_disposable(args):
     profile, threshold = args.get("profile"), args.get("threshold", 0.8)
     tabs = send_extension_command("getTabs", {}, profile=profile)
-    if isinstance(tabs, dict) and "error" in tabs:
-        return [text(f"Error: {tabs['error']}")]
+    if (err := ext_error(tabs)):
+        return [text(err)]
     # Find ungrouped tabs above threshold
     to_triage = [
         {'id': t['id'], 'title': t.get('title', '')[:60], 'probability': p['probability']}

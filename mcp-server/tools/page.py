@@ -6,24 +6,12 @@ import mimetypes
 import os
 
 from ipc import send_extension_command
-from tools import tool, schema, text
+from tools import tool, schema, text, ext_error, tab_id_error
 
 # Native messaging caps host→extension messages at 1MB and base64 adds a third, so the
 # in-page upload fallback (debugger blocked) only gets file bytes up to this much in total
 UPLOAD_FALLBACK_MAX = 700 * 1024
 REF_PROP = {"ref": {"type": ["string", "integer"], "description": "Element ref from browser_read_page / browser_find (e.g. 12 or 'ref_12')"}}
-
-
-def _error(result) -> str:
-    """Error message from an extension result, or None when it succeeded."""
-    if not isinstance(result, dict):
-        return f"unexpected result: {result}"
-    return result.get("error")
-
-
-def _need_tab(args):
-    """tab_id error message, or None."""
-    return None if isinstance(args.get("tab_id"), int) else "Error: tab_id (integer) is required"
 
 
 @tool("browser_read_page", "Accessibility-style tree of a tab: one line per element, `role \"name\" [ref=N]` plus value/checked/href. Use refs with browser_action(ref=...), browser_upload and browser_wait_for. filter=interactive (default) lists only things you can act on; all adds headings, landmarks and text. Works on background tabs; no focus change.", schema({
@@ -33,12 +21,12 @@ def _need_tab(args):
     "ref": {**REF_PROP["ref"], "description": "Only read this element's subtree"},
 }, ["tab_id"]))
 async def browser_read_page(args):
-    if (err := _need_tab(args)):
+    if (err := tab_id_error(args)):
         return [text(err)]
     r = send_extension_command("readPage", {"tabId": args["tab_id"], "filter": args.get("filter", "interactive"),
                                             "maxChars": args.get("max_chars", 30000), "ref": args.get("ref")}, profile=args.get("profile"))
-    if (err := _error(r)):
-        return [text(f"Error: {err}")]
+    if (err := ext_error(r, dict)):
+        return [text(err)]
     s = r.get("scroll", {})
     head = (f"url: {r.get('url')}\ntitle: {r.get('title')}\n"
             f"scroll: y={s.get('y')} of {s.get('height')} (viewport {s.get('viewport')}) · {r.get('nodes')} nodes")
@@ -52,13 +40,13 @@ async def browser_read_page(args):
     "query": {"type": "string"},
 }, ["tab_id", "query"]))
 async def browser_find(args):
-    if (err := _need_tab(args)):
+    if (err := tab_id_error(args)):
         return [text(err)]
     if not args.get("query"):
         return [text("Error: query is required")]
     r = send_extension_command("findInPage", {"tabId": args["tab_id"], "query": args["query"]}, profile=args.get("profile"))
-    if (err := _error(r)):
-        return [text(f"Error: {err}")]
+    if (err := ext_error(r, dict)):
+        return [text(err)]
     lines = r.get("lines") or []
     if not lines:
         return [text(f"No elements match {args['query']!r} on {r.get('url')}")]
@@ -71,11 +59,11 @@ async def browser_find(args):
     "max_chars": {"type": "integer", "default": 50000},
 }, ["tab_id"]))
 async def browser_get_page_text(args):
-    if (err := _need_tab(args)):
+    if (err := tab_id_error(args)):
         return [text(err)]
     r = send_extension_command("getPageText", {"tabId": args["tab_id"], "maxChars": args.get("max_chars", 50000)}, profile=args.get("profile"))
-    if (err := _error(r)):
-        return [text(f"Error: {err}")]
+    if (err := ext_error(r, dict)):
+        return [text(err)]
     tail = f"\n[truncated at {args.get('max_chars', 50000)} of {r.get('chars')} chars]" if r.get("truncated") else ""
     return [text(f"url: {r.get('url')}\ntitle: {r.get('title')}\nsource: <{r.get('source')}>\n\n{r.get('text')}{tail}")]
 
@@ -90,7 +78,7 @@ async def browser_get_page_text(args):
     "timeout_ms": {"type": "integer", "default": 10000, "description": "Max 60000"},
 }, ["tab_id"]))
 async def browser_wait_for(args):
-    if (err := _need_tab(args)):
+    if (err := tab_id_error(args)):
         return [text(err)]
     if not any(args.get(k) is not None for k in ("selector", "ref", "text", "url_contains")):
         return [text("Error: give at least one of selector, ref, text, url_contains")]
@@ -98,8 +86,8 @@ async def browser_wait_for(args):
     payload = {"tabId": args["tab_id"], "selector": args.get("selector"), "ref": args.get("ref"), "text": args.get("text"),
                "urlContains": args.get("url_contains"), "gone": bool(args.get("gone")), "timeoutMs": timeout_ms}
     r = send_extension_command("waitFor", payload, timeout=timeout_ms / 1000 + 5, profile=args.get("profile"))
-    if (err := _error(r)):
-        return [text(f"Error: {err}")]
+    if (err := ext_error(r, dict)):
+        return [text(err)]
     return [text(json.dumps(r))]
 
 
@@ -130,7 +118,7 @@ def _upload_files(paths: list):
     "selector": {"type": "string"},
 }, ["tab_id", "paths"]))
 async def browser_upload(args):
-    if (err := _need_tab(args)):
+    if (err := tab_id_error(args)):
         return [text(err)]
     paths = args.get("paths")
     if not isinstance(paths, list) or not paths:
@@ -145,6 +133,6 @@ async def browser_upload(args):
     if files:
         payload["files"] = files
     r = send_extension_command("uploadFiles", payload, timeout=30, profile=args.get("profile"))
-    if (err := _error(r)):
-        return [text(f"Error: {err}")]
+    if (err := ext_error(r, dict)):
+        return [text(err)]
     return [text(json.dumps(r))]

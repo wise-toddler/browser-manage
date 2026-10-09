@@ -4,18 +4,9 @@ import json
 import time
 
 from ipc import send_extension_command
-from tools import tool, schema, text
+from tools import tool, schema, text, ext_error, tab_id_error
 
 INFOBAR = "While capture is on, the browser shows its 'debugging this browser' infobar."
-
-
-def _err(result):
-    """Error text for a failed extension call, or None."""
-    if not isinstance(result, dict):
-        return f"Error: {result}"
-    if "error" in result:
-        return f"Error: {result['error']}"
-    return None
 
 
 def _clock(ms):
@@ -50,12 +41,12 @@ def _header(r, noun):
 }, ["tab_id"]))
 async def browser_debug(args):
     tab_id = args.get("tab_id")
-    if not isinstance(tab_id, int):
-        return [text("Error: tab_id (integer) is required")]
+    if (err := tab_id_error(args)):
+        return [text(err)]
     duration_ms = min(int(args.get("duration_ms") or 0), 60000)
     result = send_extension_command("debugCapture", {"tabId": tab_id, "mode": args.get("action", "status"), "reload": args.get("reload", False),
                                                      "durationMs": duration_ms}, timeout=30 + duration_ms / 1000, profile=args.get("profile"))
-    return [text(_err(result) or json.dumps(result))]
+    return [text(ext_error(result, dict) or json.dumps(result))]
 
 
 @tool("browser_read_console", f"Read a tab's console: console.* calls, uncaught exceptions and browser log entries (failed loads, violations). Starts capture if it isn't on (that first read only has messages logged so far). {INFOBAR}", schema({
@@ -68,13 +59,13 @@ async def browser_debug(args):
 }, ["tab_id"]))
 async def browser_read_console(args):
     tab_id = args.get("tab_id")
-    if not isinstance(tab_id, int):
-        return [text("Error: tab_id (integer) is required")]
+    if (err := tab_id_error(args)):
+        return [text(err)]
     payload = {"tabId": tab_id, "pattern": args.get("pattern"), "onlyErrors": args.get("only_errors", False),
                "limit": args.get("limit", 100), "clear": args.get("clear", False), "pageOnly": args.get("page_only", True)}
     r = send_extension_command("readConsole", payload, timeout=30, profile=args.get("profile"))
-    if _err(r):
-        return [text(_err(r))]
+    if (err := ext_error(r, dict)):
+        return [text(err)]
     lines = [_header(r, "console messages")]
     for m in r.get("messages", []):
         where = f"  ({m['url']}:{m['line']})" if m.get("url") and m.get("line") else f"  ({m['url']})" if m.get("url") else ""
@@ -93,13 +84,13 @@ async def browser_read_console(args):
 }, ["tab_id"]))
 async def browser_read_network(args):
     tab_id = args.get("tab_id")
-    if not isinstance(tab_id, int):
-        return [text("Error: tab_id (integer) is required")]
+    if (err := tab_id_error(args)):
+        return [text(err)]
     payload = {"tabId": tab_id, "urlPattern": args.get("url_pattern"), "onlyFailed": args.get("only_failed", False),
                "limit": args.get("limit", 100), "clear": args.get("clear", False), "requestId": args.get("request_id")}
     r = send_extension_command("readNetwork", payload, timeout=30, profile=args.get("profile"))
-    if _err(r):
-        return [text(_err(r))]
+    if (err := ext_error(r, dict)):
+        return [text(err)]
     if args.get("request_id"):
         head = f"{r.get('status')} {r.get('mime')} {r.get('url')} ({r.get('length')} chars{', truncated to 20000' if r.get('truncated') else ''}{', base64' if r.get('base64') else ''})"
         return [text(head + "\n\n" + r.get("body", ""))]
