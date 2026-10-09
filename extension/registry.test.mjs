@@ -69,7 +69,8 @@ r = await dispatch('openTabs', { urls: ['https://example.com/'], active: true },
 assert.match(r.error, /allow_focus=true/);
 assert.strictEqual(calls.length, 0);
 r = await dispatch('openTabs', { urls: ['https://example.com/'] }, native);
-assert.deepStrictEqual(r, { opened: 1, tabIds: [99] });
+assert.deepStrictEqual({ opened: r.opened, tabIds: r.tabIds }, { opened: 1, tabIds: [99] });
+assert.strictEqual(r.tabs[0].tabId, 99);
 assert.strictEqual(focusCalls().length, 0);
 
 // restoreFromTriage: agents get the move without the focus, the popup gets both

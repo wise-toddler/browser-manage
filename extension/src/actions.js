@@ -6,6 +6,8 @@ import { refSelector } from './read.js';
 
 const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, PageUp: 33, PageDown: 34, ' ': 32 };
 const INPUT_ACTIONS = ['click', 'type', 'key', 'scroll'];
+const MODIFIER_BITS = { alt: 1, option: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, command: 4, shift: 8 };
+const HIDDEN_KEY_TIMEOUT_MS = 3000;
 
 async function waitForLoad(tabId, ms = 10000) {
   const end = Date.now() + ms;
@@ -23,9 +25,13 @@ async function settled(tabId, p, extra = {}) {
 // With a debugger session: real CDP input on visible tabs, DOM fallback on hidden ones
 async function cdpAction(tabId, p, cmd) {
   const mouse = (type, x, y, extra = {}) => cmd('Input.dispatchMouseEvent', { type, x, y, ...extra });
+  let hidden = false;
   if (INPUT_ACTIONS.includes(p.action)) {
     const vis = (await cmd('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })).result.value;
-    if (vis !== 'visible') {
+    hidden = vis !== 'visible';
+    // Keys don't need a rendered frame: real CDP key events move focus and set :focus-visible on hidden
+    // tabs too (Tab/Shift+Tab traversal), so only mouse/type actions take the DOM path there
+    if (hidden && p.action !== 'key') {
       const mode = 'dom-fallback (tab hidden)';
       const r = (await cmd('Runtime.evaluate', { expression: `(${domAction})(${JSON.stringify(p)})`, returnByValue: true, userGesture: true })).result.value;
       if (r !== 'ok') return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
@@ -58,11 +64,24 @@ async function cdpAction(tabId, p, cmd) {
       await cmd('Input.insertText', { text: p.text });
       break;
     case 'key': {
-      const key = p.key; const vk = KEY_CODES[key];
-      if (!key) return { error: 'key needs key (e.g. Enter, Tab, Escape, ArrowDown)' };
-      const base = { key, code: key, ...(vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {}) };
-      await cmd('Input.dispatchKeyEvent', { type: vk ? 'rawKeyDown' : 'keyDown', ...base, ...(key.length === 1 ? { text: key } : {}) });
-      await cmd('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+      if (!p.key) return { error: 'key needs key (e.g. Enter, Tab, Escape, ArrowDown, Shift+Tab, Meta+a)' };
+      // "Shift+Tab" / "Control+a": everything before the last + is a modifier
+      const parts = String(p.key).split('+');
+      const key = parts.pop() || '+'; const vk = KEY_CODES[key];
+      const modifiers = parts.reduce((m, x) => m | (MODIFIER_BITS[x.toLowerCase()] || 0), 0);
+      const base = { key, code: key, modifiers, ...(vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {}) };
+      const text = key.length === 1 && !(modifiers & (2 | 4)) ? { text: key } : {};
+      try {
+        // A hidden tab normally answers in ms; guard anyway, and never retry: a stuck input event stays
+        // queued and fires when the tab wakes, so a retry would type the key twice
+        const ms = hidden ? HIDDEN_KEY_TIMEOUT_MS : undefined;
+        await cmd('Input.dispatchKeyEvent', { type: vk ? 'rawKeyDown' : 'keyDown', ...base, ...text }, ms);
+        await cmd('Input.dispatchKeyEvent', { type: 'keyUp', ...base }, ms);
+      } catch (e) {
+        if (hidden && /timed out/.test(e.message)) throw new Error(`key ${p.key} timed out on a hidden tab; not retried (it may still arrive when the tab wakes)`);
+        throw e;
+      }
+      if (hidden) return settled(tabId, p, { mode: 'cdp (tab hidden)' });
       break;
     }
     case 'scroll':

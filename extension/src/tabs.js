@@ -115,13 +115,15 @@ export async function openTabs(urls, active) {
   const triageWin = await getTriageWindowId();
   const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
   const win = windows.find(w => w.id !== triageWin && w.focused) || windows.find(w => w.id !== triageWin);
-  const tabIds = [];
+  const tabIds = [], tabs = [];
   for (const url of urls) {
     const tab = await chrome.tabs.create({ url, active: false, ...(win ? { windowId: win.id } : {}) });
     tabIds.push(tab.id);
+    // The requested URL: a just-created tab's own url is often still empty while it starts loading
+    tabs.push({ tabId: tab.id, url, windowId: tab.windowId });
   }
   if (active) await chrome.tabs.update(tabIds[0], { active: true });
-  return { opened: tabIds.length, tabIds };
+  return { opened: tabIds.length, tabIds, tabs };
 }
 
 export async function createGroup(name, color, tabIds) {

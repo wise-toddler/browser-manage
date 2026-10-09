@@ -10,10 +10,11 @@ Manage tabs across all connected Chrome and Edge profiles via the `browser-manag
 ## Available Tools
 
 ### Tab Management
-- `browser_get_tabs_ext` — list all tabs (via extension, supports `--profile`)
+- `browser_get_tabs_ext` — list all tabs (via extension, supports `--profile`, filter `group` / `url_contains`)
 - `browser_close_by_ids` — close tabs by ID
 - `browser_close_duplicates` — find and close duplicate tabs
 - `browser_create_group` — group tabs with name and color
+- `browser_close_group` — close every tab in a named group
 - `browser_smart_cleanup` — categorize tabs (merged PRs, sign-in, search, dupes) + predictions
 
 ### Memory
@@ -35,8 +36,9 @@ Manage tabs across all connected Chrome and Edge profiles via the `browser-manag
 
 ### Page automation (works on background tabs, never takes focus)
 - `browser_read_page` → refs, then `browser_action(ref=…)`, `browser_upload(ref=…)`, `browser_wait_for(ref|selector|text|url_contains)`
-- `browser_find(query)`, `browser_get_page_text`, `browser_run_script`, `browser_screenshot`
-- `browser_debug` + `browser_read_console` / `browser_read_network` for debugging
+- `browser_find(query)`, `browser_get_page_text`, `browser_run_script` (top-level `await`/`return`, `timeout_ms`), `browser_screenshot` (`selector`/`ref`/`clip` crop, full-page `tile`)
+- `browser_set_viewport(width, height, dpr, mobile)` until `reset=true`; `browser_open_tabs` returns tab IDs as JSON
+- `browser_debug` (`duration_ms` for one-shot) + `browser_read_console` (`page_only` default) / `browser_read_network` for debugging
 - `browser_batch` to chain steps, `browser_record` start → actions → export GIF
 - Never pass `allow_focus=true` unless the user asked for a visible tab
 

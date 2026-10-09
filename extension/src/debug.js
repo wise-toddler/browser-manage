@@ -6,10 +6,23 @@ import { isForeignFrameError, sleep } from './util.js';
 export const DEBUG_BUFFER_CAP = 500;
 const BODY_CAP = 20000;
 const LOAD_WAIT_MS = 10000;
-const captures = new Map(); // tabId -> capture
+const DURATION_MAX_MS = 60000;
+// tabId -> capture. A stopped capture keeps its buffers (active=false) so it can still be read after the
+// session is released and the infobar is gone; it's replaced by the next start, dropped when the tab closes
+const captures = new Map();
 
 export function newCapture(now = Date.now()) {
-  return { startedAt: now, console: [], network: new Map(), dropped: { console: 0, network: 0 } };
+  return { startedAt: now, active: true, console: [], network: new Map(), dropped: { console: 0, network: 0 } };
+}
+
+// Not the page's own output: other extensions' scripts, DevTools hook banners, and the browser's
+// interventions / tracking-prevention notices
+const EXTENSION_URL = /^(chrome-extension|extension|moz-extension):\/\//;
+const NOISE_TEXT = /React DevTools|Redux DevTools|__REACT_DEVTOOLS|Tracking Prevention/i;
+export function isPageMessage(e) {
+  if (EXTENSION_URL.test(e.url || '')) return false;
+  if (e.source === 'intervention') return false;
+  return !NOISE_TEXT.test(e.text || '');
 }
 
 // One console argument (a CDP RemoteObject) as readable text
@@ -49,7 +62,9 @@ export function reduceEvent(cap, method, params, now = Date.now()) {
   switch (method) {
     case 'Runtime.consoleAPICalled': {
       const level = params.type === 'warning' ? 'warning' : (params.type === 'error' || params.type === 'assert') ? 'error' : params.type;
-      const frame = params.stackTrace?.callFrames?.[0];
+      // First non-extension frame: another extension wrapping console.* puts its own frame on top of the page's call
+      const frames = params.stackTrace?.callFrames || [];
+      const frame = frames.find(f => !EXTENSION_URL.test(f.url || '')) || frames[0];
       pushConsole(cap, { ts: params.timestamp || now, level, source: 'console', text: (params.args || []).map(formatArg).join(' '), url: frame?.url, line: frame ? frame.lineNumber + 1 : undefined });
       return true;
     }
@@ -96,11 +111,15 @@ export function reduceEvent(cap, method, params, now = Date.now()) {
 
 chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
   const cap = captures.get(tabId);
-  if (cap) reduceEvent(cap, method, params || {});
+  if (cap?.active) reduceEvent(cap, method, params || {});
 });
 
-// User hit Cancel on the infobar, tab closed, or the session dropped: the capture is gone with it
-chrome.debugger.onDetach.addListener(({ tabId }) => { captures.delete(tabId); });
+// User hit Cancel on the infobar or the session dropped: capture ends, what it recorded stays readable
+chrome.debugger.onDetach.addListener(({ tabId }) => {
+  const cap = captures.get(tabId);
+  if (cap?.active) { cap.active = false; cap.endedAt = Date.now(); }
+});
+chrome.tabs.onRemoved.addListener(tabId => { captures.delete(tabId); });
 
 const BLOCKED = "Console/network capture needs the debugger, which this tab refuses because another extension has a frame in it";
 
@@ -115,11 +134,13 @@ async function waitComplete(tabId) {
 function status(tabId) {
   const cap = captures.get(tabId);
   if (!cap) return { capturing: false };
-  return { capturing: true, startedAt: cap.startedAt, console: cap.console.length, network: cap.network.size, dropped: cap.dropped };
+  const s = { capturing: cap.active, startedAt: cap.startedAt, console: cap.console.length, network: cap.network.size, dropped: cap.dropped };
+  if (!cap.active) s.endedAt = cap.endedAt;
+  return s;
 }
 
-async function start(tabId, reload) {
-  if (captures.has(tabId)) return { ...status(tabId), already: true };
+async function start(tabId, reload, durationMs) {
+  if (captures.get(tabId)?.active) return { ...status(tabId), already: true };
   try {
     await pin(tabId);
   } catch (e) {
@@ -140,31 +161,40 @@ async function start(tabId, reload) {
     return { error: isForeignFrameError(e) ? BLOCKED : e.message };
   }
   if (reload) { await sleep(300); await waitComplete(tabId); }
-  return { ...status(tabId), started: true, reloaded: !!reload };
+  if (!durationMs) return { ...status(tabId), started: true, reloaded: !!reload };
+  // One-shot: record for durationMs, then release the session so the infobar goes away; buffers stay readable
+  await sleep(Math.min(durationMs, DURATION_MAX_MS));
+  await stop(tabId);
+  return { ...status(tabId), started: true, reloaded: !!reload, stopped: true, durationMs: Math.min(durationMs, DURATION_MAX_MS) };
 }
 
 async function stop(tabId) {
-  if (!captures.has(tabId)) return { capturing: false, stopped: false };
-  captures.delete(tabId);
+  const cap = captures.get(tabId);
+  if (!cap?.active) return { capturing: false, stopped: false };
+  cap.active = false;
+  cap.endedAt = Date.now();
   try { await withDebugger(tabId, async cmd => { await cmd('Network.disable'); await cmd('Log.disable'); }); } catch {}
   unpin(tabId);
-  return { capturing: false, stopped: true };
+  return { capturing: false, stopped: true, console: cap.console.length, network: cap.network.size };
 }
 
-export async function debugCapture(tabId, { mode = 'status', reload = false } = {}) {
+export async function debugCapture(tabId, { mode = 'status', reload = false, durationMs = 0 } = {}) {
   if (typeof tabId !== 'number') return { error: 'tabId (number) required' };
-  if (mode === 'start') return start(tabId, reload);
+  if (mode === 'start') return start(tabId, reload, Number(durationMs) > 0 ? Number(durationMs) : 0);
   if (mode === 'stop') return stop(tabId);
   return status(tabId);
 }
 
-// Reading a tab that isn't being captured starts the capture; that read is necessarily (near) empty
+// Reading a tab with no capture starts one (that read is necessarily near empty); a stopped capture is
+// read as-is, without restarting it
 async function ensure(tabId) {
   if (captures.has(tabId)) return { cap: captures.get(tabId), started: false };
   const r = await start(tabId, false);
   if (r.error) return { error: r.error };
   return { cap: captures.get(tabId), started: true };
 }
+
+const STOPPED_NOTE = 'Capture is stopped: showing what it recorded. browser_debug action=start begins a new one.';
 
 function matcher(pattern) {
   if (!pattern) return () => true;
@@ -174,14 +204,17 @@ function matcher(pattern) {
 
 const STARTED_NOTE = 'Capture started just now: only what was logged before this (console) is here. Reproduce, then read again.';
 
-export async function readConsole(tabId, { pattern, onlyErrors = false, limit = 100, clear = false } = {}) {
+export async function readConsole(tabId, { pattern, onlyErrors = false, limit = 100, clear = false, pageOnly = true } = {}) {
   if (typeof tabId !== 'number') return { error: 'tabId (number) required' };
   const { cap, started, error } = await ensure(tabId);
   if (error) return { error };
   const m = matcher(pattern);
-  const hits = cap.console.filter(e => (!onlyErrors || e.level === 'error') && (m(e.text) || m(e.url)));
+  const own = pageOnly ? cap.console.filter(isPageMessage) : cap.console;
+  const hits = own.filter(e => (!onlyErrors || e.level === 'error') && (m(e.text) || m(e.url)));
   const out = { total: cap.console.length, matched: hits.length, dropped: cap.dropped.console, messages: hits.slice(-limit) };
+  if (pageOnly) out.hiddenNoise = cap.console.length - own.length;
   if (started) out.note = STARTED_NOTE;
+  else if (!cap.active) out.note = STOPPED_NOTE;
   if (clear) cap.console = [];
   return out;
 }
@@ -199,6 +232,7 @@ export async function readNetwork(tabId, { urlPattern, onlyFailed = false, limit
   const { cap, started, error } = await ensure(tabId);
   if (error) return { error };
   if (requestId) {
+    if (!cap.active) return { error: 'Capture is stopped, and the browser drops response bodies with it. Start a capture (browser_debug action=start) and repeat the request.' };
     const e = cap.network.get(requestId);
     try {
       const r = await withDebugger(tabId, cmd => cmd('Network.getResponseBody', { requestId }));
@@ -212,6 +246,7 @@ export async function readNetwork(tabId, { urlPattern, onlyFailed = false, limit
   const hits = all.filter(e => (!urlPattern || (e.url || '').includes(urlPattern)) && (!onlyFailed || e.error || e.status >= 400));
   const out = { total: all.length, matched: hits.length, dropped: cap.dropped.network, requests: hits.slice(-limit).map(({ _t0, ...e }) => e) };
   if (started) out.note = STARTED_NOTE.replace('(console)', '(nothing for network)');
+  else if (!cap.active) out.note = STOPPED_NOTE + ' Response bodies are only available while capture is on.';
   if (clear) cap.network.clear();
   return out;
 }

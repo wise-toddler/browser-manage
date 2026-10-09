@@ -1,5 +1,6 @@
 """Tab listing, closing, grouping, opening, memory/activity and suspension tools."""
 
+import json
 from urllib.parse import urlparse
 
 from ipc import send_extension_command
@@ -33,9 +34,40 @@ async def create_group(args):
     return [text(f"Created group '{group_name}' with {len(tab_ids)} tabs")]
 
 
-@tool("browser_get_tabs_ext", "Get tabs via extension with Chrome tab IDs (required for grouping).", schema())
+@tool("browser_get_tabs_ext", "Get tabs via extension with Chrome tab IDs (required for grouping). Optional filters: group title, URL substring.", schema({
+    "group": {"type": "string", "description": "Only tabs in groups with this exact title"},
+    "url_contains": {"type": "string", "description": "Only tabs whose URL contains this substring"},
+}))
 async def get_tabs_ext(args):
-    return ext_result(send_extension_command("getTabs", {}, profile=args.get("profile")))
+    result = send_extension_command("getTabs", {}, profile=args.get("profile"))
+    if not isinstance(result, list):
+        return ext_result(result)
+    group, needle = args.get("group"), args.get("url_contains")
+    if group is not None:
+        result = [t for t in result if (t.get("groupInfo") or {}).get("title") == group]
+    if needle:
+        result = [t for t in result if needle in (t.get("url") or "")]
+    return as_json(result)
+
+
+@tool("browser_close_group", "Close every tab in the tab group(s) titled `name` (e.g. clean up the tabs an agent opened with browser_open_tabs group=...). Refuses a name that matches no group.", schema({
+    "name": {"type": "string", "description": "Exact group title"},
+}, ["name"]))
+async def close_group(args):
+    profile, name = args.get("profile"), args.get("name")
+    if not isinstance(name, str) or not name:
+        return [text("Error: name (group title) is required")]
+    tabs = send_extension_command("getTabs", {}, profile=profile)
+    if not isinstance(tabs, list):
+        return ext_result(tabs)
+    ids = [t["id"] for t in tabs if (t.get("groupInfo") or {}).get("title") == name]
+    if not ids:
+        titles = sorted({(t.get("groupInfo") or {}).get("title") or "(untitled)" for t in tabs if t.get("groupInfo")})
+        return [text(f"Error: no tab group titled {name!r}. Groups: {titles}")]
+    result = send_extension_command("closeTabs", {"tabIds": ids}, profile=profile)
+    if isinstance(result, dict) and "error" in result:
+        return [text(f"Error: {result['error']}")]
+    return [text(f"Closed {len(ids)} tabs in group {name!r}")]
 
 
 @tool("browser_close_duplicates", "Find and close all duplicate tabs (same URL). Keeps one per URL.", schema())
@@ -123,7 +155,7 @@ async def close_by_ids(args):
     return [text(f"Closed {len(tab_ids)} tabs")]
 
 
-@tool("browser_open_tabs", "Open URLs as new background tabs (http/https only). Optionally add them to a named group (reuses an existing group with that name).", schema({
+@tool("browser_open_tabs", "Open URLs as new background tabs (http/https only). Optionally add them to a named group (reuses an existing group with that name). Returns the new tabs as JSON [{tab_id, url, group_id}] after the summary line.", schema({
     "urls": {"type": "array", "description": "URLs to open", "items": {"type": "string"}},
     "group": {"type": "string", "description": "Optional group name to put the new tabs in"},
     "color": {"type": "string", "description": "Group color if a new group is created", "default": "blue"},
@@ -141,8 +173,14 @@ async def open_tabs(args):
     if isinstance(result, dict) and "error" in result:
         return [text(f"Error: {result['error']}")]
     msg = f"Opened {result.get('opened', 0)} tabs"
+    opened = result.get("tabs") or [{"tabId": i, "url": u} for i, u in zip(result.get("tabIds", []), urls)]
+    group_ids = {}
     group = args.get("group")
     if group and result.get("tabIds"):
         grouped = await dispatch("browser_create_group", {"name": group, "color": args.get("color", "blue"), "tab_ids": result["tabIds"], "profile": profile})
         msg += f"; {grouped[0].text}"
-    return [text(msg)]
+        listed = send_extension_command("getTabs", {}, profile=profile)
+        if isinstance(listed, list):
+            group_ids = {t["id"]: t.get("groupId", -1) for t in listed}
+    tabs = [{"tab_id": t["tabId"], "url": t["url"], "group_id": group_ids.get(t["tabId"], -1)} for t in opened]
+    return [text(msg), text(json.dumps(tabs))]

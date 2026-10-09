@@ -21,9 +21,10 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
 | Tool | Description | Backend |
 |------|-------------|---------|
 | **Tab Management** | | |
-| `browser_get_tabs_ext` | Get tabs with Chrome IDs (supports `--profile`) | Extension |
+| `browser_get_tabs_ext` | Get tabs with Chrome IDs, filter by `group` / `url_contains` (supports `--profile`) | Extension |
 | `browser_close_duplicates` | Close all duplicate tabs + new tab pages | Extension |
 | `browser_create_group` | Create named/colored tab groups | Extension |
+| `browser_close_group` | Close every tab in a named group | Extension |
 | **Memory** | | |
 | `browser_get_memory` | Per-tab JS heap via Debugger API + hog detection | Extension |
 | **Time Tracking** | | |
@@ -41,15 +42,16 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
 | `browser_read_page` | Role/name tree with stable `[ref=N]` | Extension |
 | `browser_find` | Elements matching words, with refs | Extension |
 | `browser_get_page_text` | Readable text (article/main/body) | Extension |
-| `browser_action` | click/type/key/scroll/navigate/back/forward by ref, selector or x,y | Extension |
+| `browser_action` | click/type/key/scroll/navigate/back/forward by ref, selector or x,y (keys like `Shift+Tab` use real CDP input even on hidden tabs) | Extension |
 | `browser_wait_for` | Wait for selector/ref/text/URL (or gone) | Extension |
 | `browser_upload` | Set files on `<input type=file>` | Extension |
-| `browser_run_script` | JS in page context, logged | Extension |
-| `browser_screenshot` | Viewport or full page, hidden tabs too | Extension |
-| `browser_open_tabs` | Open URLs, optionally into a group | Extension |
+| `browser_run_script` | JS in page context, logged: last expression, top-level `await`/`return`, promise results awaited, `timeout_ms` (8s default, 60s max), wakes sleeping tabs | Extension |
+| `browser_screenshot` | Viewport, element crop (`selector`/`ref`), `clip` box, or full page in 8000px tiles; hidden tabs too | Extension |
+| `browser_set_viewport` | Emulate width/height/dpr/mobile (stays until `reset=true`) | Extension |
+| `browser_open_tabs` | Open URLs, optionally into a group; returns `[{tab_id, url, group_id}]` JSON | Extension |
 | **Debugging** | | |
-| `browser_debug` | Start/stop console + network capture (infobar shows while on) | Extension |
-| `browser_read_console` / `browser_read_network` | Read captured logs / requests, response bodies | Extension |
+| `browser_debug` | Start/stop console + network capture (infobar shows while on); `duration_ms` = one-shot | Extension |
+| `browser_read_console` / `browser_read_network` | Read captured logs / requests, response bodies; console hides extension/browser noise unless `page_only=false` | Extension |
 | **Orchestration** | | |
 | `browser_batch` | Run several tool calls in one round trip | Server |
 | `browser_record` | Record screenshots of a tab's actions, export GIF | Server |

@@ -57,7 +57,10 @@ export function selectorCenter(sel) {
 // Remember every non-zero scroll position, and put them back
 export function saveScroll() {
   const s = [];
-  for (const e of document.querySelectorAll('*')) if (e.scrollTop || e.scrollLeft) s.push([e, e.scrollTop, e.scrollLeft]);
+  // Every scrollable box, including ones at 0: a crop scrolls containers into view, and those must go back to 0
+  for (const e of document.querySelectorAll('*')) {
+    if (e.scrollTop || e.scrollLeft || e.scrollHeight > e.clientHeight || e.scrollWidth > e.clientWidth) s.push([e, e.scrollTop, e.scrollLeft]);
+  }
   window.__bmScroll = { s, x: scrollX, y: scrollY };
 }
 export function restoreScroll() {
@@ -68,10 +71,21 @@ export function restoreScroll() {
   delete window.__bmScroll;
 }
 
-// runScript fallback body: indirect eval in the page's main world (subject to the page's own CSP)
+// runScript fallback body: indirect eval in the page's main world (subject to the page's own CSP).
+// Top-level await/return are SyntaxErrors for eval: retry as an awaited expression, then as an async
+// function body (there the value comes from `return`, since eval can't report a body's last expression)
 export async function pageEval(c) {
-  try { const v = await (0, eval)(c); return { ok: true, s: JSON.stringify(v) ?? 'undefined', t: typeof v }; }
-  catch (err) { return { ok: false, err: String(err) }; }
+  const run = async src => { const v = await (0, eval)(src); return { ok: true, s: JSON.stringify(v) ?? 'undefined', t: typeof v }; };
+  try { return await run(c); }
+  catch (err) {
+    if (err instanceof SyntaxError && /await|return/.test(err.message)) {
+      for (const src of [`(async () => (${c}\n))()`, `(async () => {\n${c}\n})()`]) {
+        try { return await run(src); }
+        catch (e2) { if (!(e2 instanceof SyntaxError)) return { ok: false, err: String(e2) }; }
+      }
+    }
+    return { ok: false, err: String(err) };
+  }
 }
 
 // read_page / find: compact role+name tree with stable refs (data-bm-ref), walking open shadow roots.

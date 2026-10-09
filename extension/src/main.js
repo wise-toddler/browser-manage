@@ -16,6 +16,8 @@ import {
 import { debugCapture, readConsole, readNetwork } from './debug.js';
 // P1 page
 import { readPage, findInPage, getPageText, waitFor, uploadFiles } from './read.js';
+// feedback: capture
+import { setViewport } from './viewport.js';
 
 const NATIVE_HOST = 'com.tabmanager.host';
 let port = null;
@@ -31,7 +33,7 @@ export const ACTIONS = {
   closeTabs: p => closeTabs(p.tabIds),
   action: (p, ctx) => doAction(p.tabId, p, ctx),
   screenshot: p => screenshotTab(p.tabId, p),
-  runScript: p => runScript(p.tabId, p.code),
+  runScript: p => runScript(p.tabId, p.code, p.timeoutMs), // feedback: small (timeoutMs)
   getScriptInfo: () => getScriptInfo(),
   openTabs: (p, ctx) => (p.active && focusBlocked(p, ctx, 'open_tabs active=true')) || openTabs(p.urls, p.active),
   createGroup: p => createGroup(p.name, p.color, p.tabIds),
@@ -68,6 +70,8 @@ export const ACTIONS = {
   debugCapture: p => debugCapture(p.tabId, p),
   readConsole: p => readConsole(p.tabId, p),
   readNetwork: p => readNetwork(p.tabId, p),
+  // feedback: capture
+  setViewport: p => setViewport(p.tabId, p),
 
   // popup / extension pages
   getPendingChanges: () => getPendingChanges(),
