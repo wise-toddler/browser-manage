@@ -4,9 +4,7 @@ import json
 from urllib.parse import urlparse
 
 from ipc import send_extension_command
-from tools import tool, schema, dispatch, text, as_json, ext_result
-
-TAB_IDS = {"type": "array", "items": {"type": "integer"}}
+from tools import tool, schema, dispatch, text, as_json, ext_result, ext_error, TAB_IDS
 
 
 @tool("browser_create_group", "Create a tab group with specified tabs via extension.", schema({
@@ -25,12 +23,12 @@ async def create_group(args):
             gi = t.get('groupInfo')
             if gi and gi.get('title') == group_name:
                 result = send_extension_command("addToGroup", {"groupId": t['groupId'], "tabIds": tab_ids}, profile=profile)
-                if isinstance(result, dict) and "error" in result:
-                    return [text(f"Error: {result['error']}")]
+                if (err := ext_error(result)):
+                    return [text(err)]
                 return [text(f"Added {len(tab_ids)} tabs to existing group '{group_name}'")]
     result = send_extension_command("createGroup", {"name": group_name, "color": args.get("color", "blue"), "tabIds": tab_ids}, profile=profile)
-    if "error" in result:
-        return [text(f"Error: {result['error']}")]
+    if (err := ext_error(result)):
+        return [text(err)]
     return [text(f"Created group '{group_name}' with {len(tab_ids)} tabs")]
 
 
@@ -65,8 +63,8 @@ async def close_group(args):
         titles = sorted({(t.get("groupInfo") or {}).get("title") or "(untitled)" for t in tabs if t.get("groupInfo")})
         return [text(f"Error: no tab group titled {name!r}. Groups: {titles}")]
     result = send_extension_command("closeTabs", {"tabIds": ids}, profile=profile)
-    if isinstance(result, dict) and "error" in result:
-        return [text(f"Error: {result['error']}")]
+    if (err := ext_error(result)):
+        return [text(err)]
     return [text(f"Closed {len(ids)} tabs in group {name!r}")]
 
 
@@ -74,8 +72,8 @@ async def close_group(args):
 async def close_duplicates(args):
     profile = args.get("profile")
     tabs = send_extension_command("getTabs", {}, profile=profile)
-    if isinstance(tabs, dict) and "error" in tabs:
-        return [text(f"Error: {tabs['error']}. Is the extension running?")]
+    if (err := ext_error(tabs)):
+        return [text(err)]
     url_to_tabs = {}
     for tab in tabs:
         url_to_tabs.setdefault(tab.get('url', ''), []).append(tab)
@@ -89,16 +87,16 @@ async def close_duplicates(args):
     if not to_close:
         return [text("No duplicate tabs found")]
     result = send_extension_command("closeTabs", {"tabIds": to_close}, profile=profile)
-    if isinstance(result, dict) and "error" in result:
-        return [text(f"Error closing tabs: {result['error']}")]
+    if (err := ext_error(result)):
+        return [text(err)]
     return [text(f"Closed {len(to_close)} duplicate tabs")]
 
 
 @tool("browser_get_memory", "Get memory usage per tab with memory hog detection. Returns tabs sorted by memory.", schema())
 async def get_memory(args):
     result = send_extension_command("getTabsWithMemory", {}, profile=args.get("profile"))
-    if isinstance(result, dict) and "error" in result and not result.get("tabs"):
-        return [text(f"Error: {result['error']}. Is the extension running?")]
+    if (err := ext_error(result)) and not result.get("tabs"):
+        return [text(err)]
     return as_json(result)
 
 
@@ -150,8 +148,8 @@ async def close_by_ids(args):
     if not tab_ids:
         return [text("No tab IDs provided")]
     result = send_extension_command("closeTabs", {"tabIds": tab_ids}, profile=args.get("profile"))
-    if isinstance(result, dict) and "error" in result:
-        return [text(f"Error: {result['error']}")]
+    if (err := ext_error(result)):
+        return [text(err)]
     return [text(f"Closed {len(tab_ids)} tabs")]
 
 
@@ -170,8 +168,8 @@ async def open_tabs(args):
         return [text(f"Error: urls must be a non-empty list of http/https URLs. Rejected: {bad}")]
     payload = {"urls": urls, "active": args.get("active", False), "allowFocus": args.get("allow_focus", False)}
     result = send_extension_command("openTabs", payload, profile=profile)
-    if isinstance(result, dict) and "error" in result:
-        return [text(f"Error: {result['error']}")]
+    if (err := ext_error(result)):
+        return [text(err)]
     msg = f"Opened {result.get('opened', 0)} tabs"
     opened = result.get("tabs") or [{"tabId": i, "url": u} for i, u in zip(result.get("tabIds", []), urls)]
     group_ids = {}

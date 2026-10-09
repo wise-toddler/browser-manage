@@ -12,7 +12,7 @@ import time
 
 from PIL import Image, ImageDraw, ImageFont
 
-from tools import tool, schema, text
+from tools import tool, schema, text, tab_id_error
 from tools import capture
 
 MAX_FRAMES = 300
@@ -96,8 +96,8 @@ def _discard(tab_id):
 }, ["tab_id", "action"]))
 async def browser_record(args):
     tab_id, profile, action = args.get("tab_id"), args.get("profile"), args.get("action")
-    if not isinstance(tab_id, int):
-        return [text("Error: tab_id (integer) is required")]
+    if (err := tab_id_error(args)):
+        return [text(err)]
     if action == "start":
         _discard(tab_id)
         RECORDINGS[tab_id] = {"profile": profile, "active": True, "started": time.time(), "frames": [], "capped": False,

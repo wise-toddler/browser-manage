@@ -2,7 +2,7 @@
 
 from analysis import categorize_tabs, extract_features_server_side, predict_dispose_probability
 from ipc import send_extension_command
-from tools import tool, schema, text, as_json, ext_result, unwrap
+from tools import tool, schema, text, as_json, ext_result, ext_error, unwrap
 
 
 def learning_data(profile):
@@ -28,8 +28,8 @@ def predict_tabs(tabs, decision_log, domain_stats, tab_tracking):
 async def smart_cleanup(args):
     profile = args.get("profile")
     tabs = send_extension_command("getTabs", {}, profile=profile)
-    if isinstance(tabs, dict) and "error" in tabs:
-        return [text(f"Error: {tabs['error']}")]
+    if (err := ext_error(tabs)):
+        return [text(err)]
     decision_log, domain_stats, tab_tracking = learning_data(profile)
     cats = categorize_tabs(tabs, check_prs=args.get("check_prs", True))
     # Build summary with IDs for easy closing
@@ -87,8 +87,8 @@ async def record_cleanup(args):
 async def get_predictions(args):
     profile = args.get("profile")
     tabs = send_extension_command("getTabs", {}, profile=profile)
-    if isinstance(tabs, dict) and "error" in tabs:
-        return [text(f"Error: {tabs['error']}")]
+    if (err := ext_error(tabs)):
+        return [text(err)]
     predictions = [
         {'id': t['id'], 'title': t.get('title', '')[:60], 'domain': f.get('domain', ''),
          'dispose_probability': p.get('probability'), 'confidence': p.get('confidence'),

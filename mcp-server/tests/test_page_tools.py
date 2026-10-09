@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import server  # noqa: E402,F401  (registers every tool)
 import tools.page as page  # noqa: E402
-from tools import REGISTRY, dispatch  # noqa: E402
+from tools import REGISTRY, dispatch, ext_error, ext_result, tab_id_error  # noqa: E402
 
 sent = []
 
@@ -82,4 +82,11 @@ with tempfile.TemporaryDirectory() as d:
         run("browser_upload", {"tab_id": 5, "paths": [home_rel], "ref": 1})
         assert sent[-1][1]["paths"] == [small]
 print("PASS upload validation")
+
+# Shared error helpers
+assert ext_error({"error": "boom"}) == "Error: boom" and ext_error([1]) is None and ext_error({"ok": True}, dict) is None
+assert ext_error("oops", dict) == "Error: unexpected result: oops"
+assert ext_result({"error": "boom"})[0].text == "Error: boom" and ext_result([1])[0].text == "[\n  1\n]"
+assert tab_id_error({"tab_id": 5}) is None and tab_id_error({"tab_id": "5"}) == "Error: tab_id (integer) is required"
+print("PASS error helpers")
 print("ALL PASS")

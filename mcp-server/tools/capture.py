@@ -8,7 +8,7 @@ import time
 from mcp.types import ImageContent
 
 from ipc import send_extension_command
-from tools import tool, schema, text
+from tools import tool, schema, text, ext_error, tab_id_error
 from tools.page import REF_PROP
 
 
@@ -109,8 +109,8 @@ def screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "j
 }, ["tab_id"]))
 async def browser_screenshot(args):
     tab_id = args.get("tab_id")
-    if not isinstance(tab_id, int):
-        return [text("Error: tab_id (integer) is required")]
+    if (err := tab_id_error(args)):
+        return [text(err)]
     clip = args.get("clip")
     if clip is not None and not (isinstance(clip, dict) and clip.get("width") and clip.get("height")):
         return [text("Error: clip needs width and height (CSS px, viewport-relative)")]
@@ -130,12 +130,12 @@ async def browser_screenshot(args):
 }, ["tab_id"]))
 async def browser_set_viewport(args):
     tab_id = args.get("tab_id")
-    if not isinstance(tab_id, int):
-        return [text("Error: tab_id (integer) is required")]
+    if (err := tab_id_error(args)):
+        return [text(err)]
     if not args.get("reset") and (args.get("width") is None) != (args.get("height") is None):
         return [text("Error: give both width and height")]
     payload = {"tabId": tab_id, **{k: args[k] for k in ("width", "height", "dpr", "mobile", "reset") if k in args}}
     r = send_extension_command("setViewport", payload, profile=args.get("profile"))
-    if isinstance(r, dict) and "error" in r:
-        return [text(f"Error: {r['error']}")]
+    if (err := ext_error(r)):
+        return [text(err)]
     return [text(json.dumps(r))]
