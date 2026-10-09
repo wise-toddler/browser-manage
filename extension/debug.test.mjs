@@ -32,9 +32,11 @@ const wrapped = newCapture(0);
 reduceEvent(wrapped, 'Runtime.consoleAPICalled', { type: 'log', args: [str('page log')],
   stackTrace: { callFrames: [{ url: 'chrome-extension://abc/hook.js', lineNumber: 0 }, { url: 'https://t/app.js', lineNumber: 4 }] } });
 reduceEvent(wrapped, 'Runtime.consoleAPICalled', { type: 'log', args: [str('ext log')],
+  stackTrace: { callFrames: [{ url: 'chrome-extension://abc/hook.js', lineNumber: 0 }, { url: 'chrome-extension://abc/main.js', lineNumber: 9 }] } });
+reduceEvent(wrapped, 'Runtime.consoleAPICalled', { type: 'log', args: [str('replayed page log')],
   stackTrace: { callFrames: [{ url: 'chrome-extension://abc/hook.js', lineNumber: 0 }] } });
 assert.deepStrictEqual(wrapped.console.map(e => [e.url, e.line, isPageMessage(e)]),
-  [['https://t/app.js', 5, true], ['chrome-extension://abc/hook.js', 1, false]]);
+  [['https://t/app.js', 5, true], ['chrome-extension://abc/hook.js', 1, false], ['chrome-extension://abc/hook.js', 1, true]]);
 
 // Network: full lifecycle, redirect reuse of the requestId, failure, response for an unseen id
 reduceEvent(cap, 'Network.requestWillBeSent', { requestId: 'r1', request: { method: 'GET', url: 'https://t/api' }, type: 'Fetch', timestamp: 10, wallTime: 1000 });

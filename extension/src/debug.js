@@ -20,7 +20,7 @@ export function newCapture(now = Date.now()) {
 const EXTENSION_URL = /^(chrome-extension|extension|moz-extension):\/\//;
 const NOISE_TEXT = /React DevTools|Redux DevTools|__REACT_DEVTOOLS|Tracking Prevention/i;
 export function isPageMessage(e) {
-  if (EXTENSION_URL.test(e.url || '')) return false;
+  if (EXTENSION_URL.test(e.url || '') && !e.shallow) return false;
   if (e.source === 'intervention') return false;
   return !NOISE_TEXT.test(e.text || '');
 }
@@ -65,7 +65,11 @@ export function reduceEvent(cap, method, params, now = Date.now()) {
       // First non-extension frame: another extension wrapping console.* puts its own frame on top of the page's call
       const frames = params.stackTrace?.callFrames || [];
       const frame = frames.find(f => !EXTENSION_URL.test(f.url || '')) || frames[0];
-      pushConsole(cap, { ts: params.timestamp || now, level, source: 'console', text: (params.args || []).map(formatArg).join(' '), url: frame?.url, line: frame ? frame.lineNumber + 1 : undefined });
+      const entry = { ts: params.timestamp || now, level, source: 'console', text: (params.args || []).map(formatArg).join(' '), url: frame?.url, line: frame ? frame.lineNumber + 1 : undefined };
+      // Messages logged before capture started replay with only the top frame, so a page call through a wrapper
+      // looks like the extension's own log: keep those visible rather than hide real page output
+      if (frames.length === 1) entry.shallow = true;
+      pushConsole(cap, entry);
       return true;
     }
     case 'Runtime.exceptionThrown': {
