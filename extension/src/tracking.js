@@ -4,16 +4,22 @@ import { isSuspendedTab, parseSuspendedUrl } from './suspend.js';
 import { getTabs } from './tabs.js';
 import { triageTabs } from './triage.js';
 
-let tabTracking = {};
-let activeTabId = null;
-const extensionClosing = new Set();
-let persistTimer = null;
+// All mutable module state lives here; storage writes go only through the Persistence section below
+const state = {
+  tabTracking: {}, // tabId -> tracking entry
+  activeTabId: null,
+  extensionClosing: new Set(),
+  persistTimer: null,
+  pendingOps: [], // (decisionLog, domainStats) => void
+  flushTimer: null,
+  flushChain: Promise.resolve(),
+};
 
-export const getTabTracking = () => tabTracking;
+export const getTabTracking = () => state.tabTracking;
 
 // Closes we initiate are logged as 'extension', not as the user's own 'manual' decisions
 export function markExtensionClosing(tabIds) {
-  tabIds.forEach(id => extensionClosing.add(id));
+  tabIds.forEach(id => state.extensionClosing.add(id));
 }
 
 // Resolve domain for suspended tabs by extracting original URL
@@ -38,7 +44,7 @@ function newTrackingEntry(tab) {
   const now = Date.now();
   const url = tab.pendingUrl || tab.url || '';
   const domain = isSuspendedTab(url) ? resolveTrackingDomain(url) : getDomainFromUrl(url);
-  const openerDomain = tab.openerTabId ? (tabTracking[tab.openerTabId]?.domain || '') : '';
+  const openerDomain = tab.openerTabId ? (state.tabTracking[tab.openerTabId]?.domain || '') : '';
   return {
     createdAt: now, lastVisitedAt: now,
     totalFocusMs: 0, focusStartedAt: null,
@@ -51,35 +57,66 @@ function newTrackingEntry(tab) {
   };
 }
 
+// --- Persistence: one writer per storage key ---
+// 'tabTracking' is written only by persistTracking; 'decisionLog' + 'domainStats' only by flushDecisions
+
 chrome.storage.local.get('tabTracking', (data) => {
-  tabTracking = data.tabTracking || {};
+  state.tabTracking = data.tabTracking || {};
 });
 
 function persistTracking() {
   // Debounce: batch writes within 5s
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    chrome.storage.local.set({ tabTracking });
+  if (state.persistTimer) clearTimeout(state.persistTimer);
+  state.persistTimer = setTimeout(() => {
+    chrome.storage.local.set({ tabTracking: state.tabTracking });
   }, 5000);
 }
 
+// Decision log + domain stats writes go through one queue, applied in a single storage read-modify-write.
+// Closing many tabs at once fires an onRemoved per tab; when each did its own concurrent read-modify-write,
+// entries were lost (last write wins) and the worker got busy enough that the close reply timed out
+const DECISION_LOG_CAP = 500;
+const FLUSH_DELAY_MS = 250;
+const FLUSH_EAGER_AT = 200;
+
+function enqueue(op) {
+  state.pendingOps.push(op);
+  if (state.pendingOps.length >= FLUSH_EAGER_AT) { flushDecisions(); return; }
+  clearTimeout(state.flushTimer);
+  state.flushTimer = setTimeout(flushDecisions, FLUSH_DELAY_MS);
+}
+
+// Apply everything queued; serialized so two flushes never interleave their read-modify-writes
+export function flushDecisions() {
+  clearTimeout(state.flushTimer);
+  state.flushTimer = null;
+  state.flushChain = state.flushChain.then(async () => {
+    if (!state.pendingOps.length) return;
+    const ops = state.pendingOps.splice(0);
+    const { decisionLog = [], domainStats = {} } = await chrome.storage.local.get(['decisionLog', 'domainStats']);
+    for (const op of ops) op(decisionLog, domainStats);
+    await chrome.storage.local.set({ decisionLog: decisionLog.slice(-DECISION_LOG_CAP), domainStats });
+  }).catch(e => console.error('decision flush failed', e));
+  return state.flushChain;
+}
+
 chrome.tabs.onCreated.addListener((tab) => {
-  tabTracking[tab.id] = newTrackingEntry(tab);
+  state.tabTracking[tab.id] = newTrackingEntry(tab);
   persistTracking();
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   const now = Date.now();
   // End focus for previous tab
-  if (activeTabId && tabTracking[activeTabId]) {
-    const prev = tabTracking[activeTabId];
+  if (state.activeTabId && state.tabTracking[state.activeTabId]) {
+    const prev = state.tabTracking[state.activeTabId];
     if (prev.focusStartedAt) {
       prev.totalFocusMs += (now - prev.focusStartedAt);
       prev.focusStartedAt = null;
     }
   }
   // Start focus for new tab
-  const entry = tabTracking[activeInfo.tabId];
+  const entry = state.tabTracking[activeInfo.tabId];
   if (entry) {
     entry.lastVisitedAt = now;
     entry.activationCount++;
@@ -92,38 +129,38 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     }
     entry.focusStartedAt = now;
   } else {
-    tabTracking[activeInfo.tabId] = newTrackingEntry({ id: activeInfo.tabId, url: '' });
-    tabTracking[activeInfo.tabId].focusStartedAt = now;
-    tabTracking[activeInfo.tabId].activationCount = 1;
-    tabTracking[activeInfo.tabId].activationTimestamps = [now];
+    state.tabTracking[activeInfo.tabId] = newTrackingEntry({ id: activeInfo.tabId, url: '' });
+    state.tabTracking[activeInfo.tabId].focusStartedAt = now;
+    state.tabTracking[activeInfo.tabId].activationCount = 1;
+    state.tabTracking[activeInfo.tabId].activationTimestamps = [now];
   }
-  activeTabId = activeInfo.tabId;
+  state.activeTabId = activeInfo.tabId;
   persistTracking();
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  const entry = tabTracking[tabId];
+  const entry = state.tabTracking[tabId];
   if (entry && isTrackableDomain(entry.domain)) {
     const features = extractFeatures(tabId);
-    const source = extensionClosing.has(tabId) ? 'extension' : 'manual';
-    extensionClosing.delete(tabId);
+    const source = state.extensionClosing.has(tabId) ? 'extension' : 'manual';
+    state.extensionClosing.delete(tabId);
     logDecision(features, 'closed', source, entry.domain);
     updateDomainStats(entry.domain, 'closed', features);
   }
-  delete tabTracking[tabId];
+  delete state.tabTracking[tabId];
   persistTracking();
 });
 
 // Detect redirects: domain change within same tab
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url && tabTracking[tabId]) {
+  if (changeInfo.url && state.tabTracking[tabId]) {
     const newDomain = getDomainFromUrl(changeInfo.url);
-    const oldDomain = tabTracking[tabId].domain;
+    const oldDomain = state.tabTracking[tabId].domain;
     if (oldDomain && newDomain && oldDomain !== newDomain) {
-      tabTracking[tabId].redirectCount++;
-      tabTracking[tabId].redirectedFrom = oldDomain;
+      state.tabTracking[tabId].redirectCount++;
+      state.tabTracking[tabId].redirectedFrom = oldDomain;
     }
-    tabTracking[tabId].domain = newDomain;
+    state.tabTracking[tabId].domain = newDomain;
     persistTracking();
   }
 });
@@ -131,11 +168,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // Backfill existing tabs that predate tracking + migrate old entries
 chrome.tabs.query({}, (tabs) => {
   for (const tab of tabs) {
-    if (!tabTracking[tab.id]) {
-      tabTracking[tab.id] = newTrackingEntry(tab);
+    if (!state.tabTracking[tab.id]) {
+      state.tabTracking[tab.id] = newTrackingEntry(tab);
     } else {
       // Migrate old entries
-      const e = tabTracking[tab.id];
+      const e = state.tabTracking[tab.id];
       if (e.totalFocusMs === undefined) e.totalFocusMs = 0;
       if (e.focusStartedAt === undefined) e.focusStartedAt = null;
       if (e.activationCount === undefined) e.activationCount = 0;
@@ -153,7 +190,7 @@ chrome.tabs.query({}, (tabs) => {
 
 // Extract full feature vector from a tab's tracking data
 function extractFeatures(tabId) {
-  const entry = tabTracking[tabId];
+  const entry = state.tabTracking[tabId];
   if (!entry) return {};
   const now = Date.now();
   let totalFocus = entry.totalFocusMs || 0;
@@ -169,7 +206,7 @@ function extractFeatures(tabId) {
     maxGap = Math.max(...gaps) / 60000;
   }
   let domainTabCount = 0;
-  for (const [, t] of Object.entries(tabTracking)) {
+  for (const [, t] of Object.entries(state.tabTracking)) {
     if (t.domain === entry.domain) domainTabCount++;
   }
   return {
@@ -190,37 +227,7 @@ function extractFeatures(tabId) {
   };
 }
 
-// Decision log + domain stats writes go through one queue, applied in a single storage read-modify-write.
-// Closing many tabs at once fires an onRemoved per tab; when each did its own concurrent read-modify-write,
-// entries were lost (last write wins) and the worker got busy enough that the close reply timed out
-const DECISION_LOG_CAP = 500;
-const FLUSH_DELAY_MS = 250;
-const FLUSH_EAGER_AT = 200;
-const pendingOps = []; // (decisionLog, domainStats) => void
-let flushTimer = null;
-let flushChain = Promise.resolve();
-
-function enqueue(op) {
-  pendingOps.push(op);
-  if (pendingOps.length >= FLUSH_EAGER_AT) { flushDecisions(); return; }
-  clearTimeout(flushTimer);
-  flushTimer = setTimeout(flushDecisions, FLUSH_DELAY_MS);
-}
-
-// Apply everything queued; serialized so two flushes never interleave their read-modify-writes
-export function flushDecisions() {
-  clearTimeout(flushTimer);
-  flushTimer = null;
-  flushChain = flushChain.then(async () => {
-    if (!pendingOps.length) return;
-    const ops = pendingOps.splice(0);
-    const { decisionLog = [], domainStats = {} } = await chrome.storage.local.get(['decisionLog', 'domainStats']);
-    for (const op of ops) op(decisionLog, domainStats);
-    await chrome.storage.local.set({ decisionLog: decisionLog.slice(-DECISION_LOG_CAP), domainStats });
-  }).catch(e => console.error('decision flush failed', e));
-  return flushChain;
-}
-
+// Producers: queue changes for flushDecisions, never write storage directly
 function logDecision(features, outcome, source, domain) {
   const entry = { features, outcome, source, domain, timestamp: Date.now() };
   enqueue(log => { log.push(entry); });
@@ -281,7 +288,7 @@ export async function getTabActivity() {
   const tabs = await getTabs();
   const now = Date.now();
   return tabs.map(t => {
-    const tracking = tabTracking[t.id] || { createdAt: now, lastVisitedAt: now };
+    const tracking = state.tabTracking[t.id] || { createdAt: now, lastVisitedAt: now };
     return {
       ...t,
       created_at: tracking.createdAt,
@@ -297,7 +304,7 @@ export async function getStaleTabs(thresholdHours = 2) {
   const thresholdMs = thresholdHours * 3600000;
   const now = Date.now();
   return activity.filter(t => {
-    const lastVisited = tabTracking[t.id]?.lastVisitedAt || now;
+    const lastVisited = state.tabTracking[t.id]?.lastVisitedAt || now;
     return (now - lastVisited) > thresholdMs;
   });
 }
@@ -306,7 +313,7 @@ export async function getStaleTabs(thresholdHours = 2) {
 export async function runCheckpoint() {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
-    const entry = tabTracking[tab.id];
+    const entry = state.tabTracking[tab.id];
     if (entry && entry.domain) updateDomainStatsSurvived(entry.domain);
   }
   // One write for all the survival bumps; the flush also trims the log
@@ -323,7 +330,7 @@ export async function runCheckpoint() {
       const idleThreshold = 24 * 60 * 60000; // 1 day
       const toTriage = [];
       for (const tab of tabs) {
-        const tr = tabTracking[tab.id];
+        const tr = state.tabTracking[tab.id];
         if (!tr || !isTrackableDomain(tr.domain)) continue;
         if (tab.pinned || tab.groupId !== -1) continue;
         if ((now - tr.lastVisitedAt) > idleThreshold && (tr.activationCount || 0) <= 2) {
