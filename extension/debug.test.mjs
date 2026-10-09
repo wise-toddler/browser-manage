@@ -3,9 +3,9 @@
 import assert from 'node:assert';
 
 const listener = () => ({ addListener() {} });
-globalThis.chrome = { debugger: { onDetach: listener(), onEvent: listener() }, tabs: {}, scripting: {} };
+globalThis.chrome = { debugger: { onDetach: listener(), onEvent: listener() }, tabs: { onRemoved: listener() }, scripting: {} };
 
-const { newCapture, reduceEvent, DEBUG_BUFFER_CAP } = await import('./src/debug.js');
+const { newCapture, reduceEvent, isPageMessage, DEBUG_BUFFER_CAP } = await import('./src/debug.js');
 
 const cap = newCapture(0);
 const str = v => ({ type: 'string', value: v });
@@ -26,6 +26,15 @@ assert.strictEqual(cap.console[3].text, '[1, 2]');
 assert.match(cap.console[4].text, /TypeError: boom/);
 assert.strictEqual(cap.console[4].source, 'exception');
 assert.strictEqual(cap.console[5].source, 'network');
+
+// Another extension wrapping console.log: the page's frame (not the wrapper's) is the location, so page_only keeps it
+const wrapped = newCapture(0);
+reduceEvent(wrapped, 'Runtime.consoleAPICalled', { type: 'log', args: [str('page log')],
+  stackTrace: { callFrames: [{ url: 'chrome-extension://abc/hook.js', lineNumber: 0 }, { url: 'https://t/app.js', lineNumber: 4 }] } });
+reduceEvent(wrapped, 'Runtime.consoleAPICalled', { type: 'log', args: [str('ext log')],
+  stackTrace: { callFrames: [{ url: 'chrome-extension://abc/hook.js', lineNumber: 0 }] } });
+assert.deepStrictEqual(wrapped.console.map(e => [e.url, e.line, isPageMessage(e)]),
+  [['https://t/app.js', 5, true], ['chrome-extension://abc/hook.js', 1, false]]);
 
 // Network: full lifecycle, redirect reuse of the requestId, failure, response for an unseen id
 reduceEvent(cap, 'Network.requestWillBeSent', { requestId: 'r1', request: { method: 'GET', url: 'https://t/api' }, type: 'Fetch', timestamp: 10, wallTime: 1000 });

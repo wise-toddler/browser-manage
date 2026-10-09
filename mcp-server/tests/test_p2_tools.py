@@ -144,7 +144,7 @@ def test_debug_output():
     assert texts(run("browser_debug", {"tab_id": 13, "action": "start"}))[0].startswith("Error: Console/network capture needs the debugger")
     assert json.loads(texts(run("browser_debug", {"tab_id": 1, "action": "start", "reload": True}))[0]) == {"capturing": True, "started": True}
     sent = [c for c in CALLS if c[0] == "debugCapture"][-1][1]
-    assert sent == {"tabId": 1, "mode": "start", "reload": True}, sent
+    assert sent == {"tabId": 1, "mode": "start", "reload": True, "durationMs": 0}, sent
     print("PASS debug tools: console/network formatting, body view, blocked-tab error, start payload")
 
 

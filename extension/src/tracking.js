@@ -190,49 +190,77 @@ function extractFeatures(tabId) {
   };
 }
 
-async function logDecision(features, outcome, source, domain) {
-  const data = await chrome.storage.local.get('decisionLog');
-  const log = data.decisionLog || [];
-  log.push({ features, outcome, source, domain, timestamp: Date.now() });
-  while (log.length > 500) log.shift();
-  await chrome.storage.local.set({ decisionLog: log });
+// Decision log + domain stats writes go through one queue, applied in a single storage read-modify-write.
+// Closing many tabs at once fires an onRemoved per tab; when each did its own concurrent read-modify-write,
+// entries were lost (last write wins) and the worker got busy enough that the close reply timed out
+const DECISION_LOG_CAP = 500;
+const FLUSH_DELAY_MS = 250;
+const FLUSH_EAGER_AT = 200;
+const pendingOps = []; // (decisionLog, domainStats) => void
+let flushTimer = null;
+let flushChain = Promise.resolve();
+
+function enqueue(op) {
+  pendingOps.push(op);
+  if (pendingOps.length >= FLUSH_EAGER_AT) { flushDecisions(); return; }
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(flushDecisions, FLUSH_DELAY_MS);
+}
+
+// Apply everything queued; serialized so two flushes never interleave their read-modify-writes
+export function flushDecisions() {
+  clearTimeout(flushTimer);
+  flushTimer = null;
+  flushChain = flushChain.then(async () => {
+    if (!pendingOps.length) return;
+    const ops = pendingOps.splice(0);
+    const { decisionLog = [], domainStats = {} } = await chrome.storage.local.get(['decisionLog', 'domainStats']);
+    for (const op of ops) op(decisionLog, domainStats);
+    await chrome.storage.local.set({ decisionLog: decisionLog.slice(-DECISION_LOG_CAP), domainStats });
+  }).catch(e => console.error('decision flush failed', e));
+  return flushChain;
+}
+
+function logDecision(features, outcome, source, domain) {
+  const entry = { features, outcome, source, domain, timestamp: Date.now() };
+  enqueue(log => { log.push(entry); });
 }
 
 function emptyDomainStats() {
   return { totalClosed: 0, totalKept: 0, totalOpened: 0, avgLifespanMinutes: 0, avgActivations: 0, avgFocusMs: 0, decisionCount: 0 };
 }
 
-async function updateDomainStats(domain, outcome, features) {
+function updateDomainStats(domain, outcome, features) {
   if (!domain) return;
-  const data = await chrome.storage.local.get('domainStats');
-  const stats = data.domainStats || {};
-  if (!stats[domain]) stats[domain] = emptyDomainStats();
-  const s = stats[domain];
-  if (outcome === 'closed') s.totalClosed++;
-  else if (outcome === 'kept') s.totalKept++;
-  s.decisionCount++;
-  const n = s.decisionCount;
-  s.avgLifespanMinutes += ((features.ageMinutes || 0) - s.avgLifespanMinutes) / n;
-  s.avgActivations += ((features.activationCount || 0) - s.avgActivations) / n;
-  s.avgFocusMs += ((features.totalFocusMs || 0) - s.avgFocusMs) / n;
-  await chrome.storage.local.set({ domainStats: stats });
+  enqueue((_, stats) => {
+    if (!stats[domain]) stats[domain] = emptyDomainStats();
+    const s = stats[domain];
+    if (outcome === 'closed') s.totalClosed++;
+    else if (outcome === 'kept') s.totalKept++;
+    s.decisionCount++;
+    const n = s.decisionCount;
+    s.avgLifespanMinutes += ((features.ageMinutes || 0) - s.avgLifespanMinutes) / n;
+    s.avgActivations += ((features.activationCount || 0) - s.avgActivations) / n;
+    s.avgFocusMs += ((features.totalFocusMs || 0) - s.avgFocusMs) / n;
+  });
 }
 
-async function updateDomainStatsSurvived(domain) {
+function updateDomainStatsSurvived(domain) {
   if (!domain) return;
-  const data = await chrome.storage.local.get('domainStats');
-  const stats = data.domainStats || {};
-  if (!stats[domain]) stats[domain] = emptyDomainStats();
-  stats[domain].totalOpened++;
-  await chrome.storage.local.set({ domainStats: stats });
+  enqueue((_, stats) => {
+    if (!stats[domain]) stats[domain] = emptyDomainStats();
+    stats[domain].totalOpened++;
+  });
 }
 
 export async function getDecisionLog() {
+  await flushDecisions();
   const data = await chrome.storage.local.get('decisionLog');
   return data.decisionLog || [];
 }
 
 export async function getDomainStats() {
+  await flushDecisions();
   const data = await chrome.storage.local.get('domainStats');
   return data.domainStats || {};
 }
@@ -241,10 +269,11 @@ export async function recordCleanupResult(kept = [], closed = []) {
   for (const item of kept) {
     const features = extractFeatures(item.tabId);
     if (features && Object.keys(features).length) {
-      await logDecision(features, 'kept', 'cleanup', item.domain || '');
-      await updateDomainStats(item.domain || '', 'kept', features);
+      logDecision(features, 'kept', 'cleanup', item.domain || '');
+      updateDomainStats(item.domain || '', 'kept', features);
     }
   }
+  await flushDecisions();
   return { data: { recorded: true, kept: kept.length, closed: closed.length } };
 }
 
@@ -278,12 +307,10 @@ export async function runCheckpoint() {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     const entry = tabTracking[tab.id];
-    if (entry && entry.domain) await updateDomainStatsSurvived(entry.domain);
+    if (entry && entry.domain) updateDomainStatsSurvived(entry.domain);
   }
-  // Trim decision log
-  const data = await chrome.storage.local.get('decisionLog');
-  const log = data.decisionLog || [];
-  if (log.length > 500) await chrome.storage.local.set({ decisionLog: log.slice(-500) });
+  // One write for all the survival bumps; the flush also trims the log
+  const log = await getDecisionLog();
 
   // Auto-triage if enabled
   const settings = await chrome.storage.local.get('autoTriageEnabled');

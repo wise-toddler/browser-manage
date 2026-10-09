@@ -37,19 +37,24 @@ def _header(r, noun):
     h = f"{r.get('matched', 0)} of {r.get('total', 0)} {noun}"
     if r.get("dropped"):
         h += f" ({r['dropped']} older dropped, buffer keeps the last 500)"
+    if r.get("hiddenNoise"):
+        h += f" ({r['hiddenNoise']} extension/browser-noise messages hidden; page_only=false shows them)"
     return h + (f"\nNote: {r['note']}" if r.get("note") else "")
 
 
-@tool("browser_debug", f"Start, stop or check console + network capture on a tab. start pins a debugger session and records console logs, exceptions, browser log entries and network requests (last 500 each); reload=true reloads after enabling to capture from page load. {INFOBAR} Tabs where another extension has a frame refuse the debugger.", schema({
+@tool("browser_debug", f"Start, stop or check console + network capture on a tab. start pins a debugger session and records console logs, exceptions, browser log entries and network requests (last 500 each); reload=true reloads after enabling to capture from page load; duration_ms makes it one-shot (capture that long, then stop so the infobar goes away; reads still work). {INFOBAR} Tabs where another extension has a frame refuse the debugger.", schema({
     "tab_id": {"type": "integer"},
     "action": {"type": "string", "enum": ["start", "stop", "status"], "default": "status"},
     "reload": {"type": "boolean", "description": "start only: reload the tab after enabling capture", "default": False},
+    "duration_ms": {"type": "integer", "description": "start only: stop automatically after this long (max 60000)"},
 }, ["tab_id"]))
 async def browser_debug(args):
     tab_id = args.get("tab_id")
     if not isinstance(tab_id, int):
         return [text("Error: tab_id (integer) is required")]
-    result = send_extension_command("debugCapture", {"tabId": tab_id, "mode": args.get("action", "status"), "reload": args.get("reload", False)}, timeout=30, profile=args.get("profile"))
+    duration_ms = min(int(args.get("duration_ms") or 0), 60000)
+    result = send_extension_command("debugCapture", {"tabId": tab_id, "mode": args.get("action", "status"), "reload": args.get("reload", False),
+                                                     "durationMs": duration_ms}, timeout=30 + duration_ms / 1000, profile=args.get("profile"))
     return [text(_err(result) or json.dumps(result))]
 
 
@@ -57,6 +62,7 @@ async def browser_debug(args):
     "tab_id": {"type": "integer"},
     "pattern": {"type": "string", "description": "Regex (case-insensitive) matched against message text and source URL; plain substring if not a valid regex"},
     "only_errors": {"type": "boolean", "default": False},
+    "page_only": {"type": "boolean", "description": "Hide other extensions' messages, DevTools hook banners and browser intervention/tracking-prevention notices", "default": True},
     "limit": {"type": "integer", "description": "Most recent N matches", "default": 100},
     "clear": {"type": "boolean", "description": "Empty the console buffer after reading", "default": False},
 }, ["tab_id"]))
@@ -65,7 +71,7 @@ async def browser_read_console(args):
     if not isinstance(tab_id, int):
         return [text("Error: tab_id (integer) is required")]
     payload = {"tabId": tab_id, "pattern": args.get("pattern"), "onlyErrors": args.get("only_errors", False),
-               "limit": args.get("limit", 100), "clear": args.get("clear", False)}
+               "limit": args.get("limit", 100), "clear": args.get("clear", False), "pageOnly": args.get("page_only", True)}
     r = send_extension_command("readConsole", payload, timeout=30, profile=args.get("profile"))
     if _err(r):
         return [text(_err(r))]

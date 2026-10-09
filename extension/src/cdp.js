@@ -85,11 +85,12 @@ export function unpin(tabId) {
   if (!s || !s.pins) return;
   s.pins--;
   s.refs++;
-  release(s);
+  // A pin ending (viewport reset, capture stopped) means the caller is done: drop the infobar now, not after idle
+  release(s, { keep: false });
 }
 
 // Run a function in the page's main world without the debugger
-export async function inPage(tabId, func, args) {
-  const [r] = await withTimeout(chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func, args }), CDP_TIMEOUT_MS, 'executeScript');
+export async function inPage(tabId, func, args, ms = CDP_TIMEOUT_MS) {
+  const [r] = await withTimeout(chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func, args }), ms, 'executeScript');
   return r?.result;
 }

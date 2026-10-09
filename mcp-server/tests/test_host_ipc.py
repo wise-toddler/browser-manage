@@ -34,7 +34,7 @@ def fake_result(action, payload):
     return {
         "echo": payload,
         "big": "x" * 3_000_000,
-        "getTabs": [{"id": 1, "url": "https://example.com/", "title": "Example", "groupId": -1}],
+        "getTabs": [{"id": 1, "url": "https://example.com/", "title": "Example", "groupId": 7, "groupInfo": {"title": "G", "color": "blue"}}],
         "getDecisionLog": {"data": []},
         "getDomainStats": {"data": {}},
         "getTabTracking": {"data": {}},
@@ -51,6 +51,7 @@ def fake_result(action, payload):
         "getPageText": {"text": "Example Domain", "chars": 14},
         "waitFor": {"ok": True, "matched": "selector", "ms": 0},
         "uploadFiles": {"ok": True, "files": 1, "mode": "cdp"},
+        "setViewport": {"ok": True, "viewport": {"width": 390, "height": 844, "dpr": 1, "mobile": False}, "measured": {"width": 390}},
     }.get(action, {"ok": True})
 
 
@@ -142,7 +143,7 @@ def main():
     print("PASS file-IPC fallback (no sock, and sock path missing)")
 
     names = [t.name for t in asyncio.run(server.list_tools())]
-    assert len(names) == 38, len(names)  # 28 from P0 + 5 page (P1) + 5 debug/batch/record (P2)
+    assert len(names) == 40, len(names)  # 28 from P0 + 5 page (P1) + 5 debug/batch/record (P2) + set_viewport + close_group (feedback)
     shot = os.path.join(TMP, "shot.jpg")
     args = {
         "browser_create_group": {"name": "G", "tab_ids": [1]}, "browser_suspend_tabs": {"tab_ids": [1]},
@@ -156,6 +157,7 @@ def main():
         "browser_batch": {"actions": [{"tool": "browser_get_tabs_ext", "args": {}}]}, "browser_record": {"tab_id": 1, "action": "start"},
         "browser_read_page": {"tab_id": 1}, "browser_find": {"tab_id": 1, "query": "more"}, "browser_get_page_text": {"tab_id": 1},
         "browser_wait_for": {"tab_id": 1, "selector": "a", "timeout_ms": 1000}, "browser_upload": {"tab_id": 1, "selector": "input", "paths": [__file__]},
+        "browser_set_viewport": {"tab_id": 1, "width": 390, "height": 844}, "browser_close_group": {"name": "G"},
     }
     for n in names:
         out = asyncio.run(server.call_tool(n, {"profile": PROFILE, **args.get(n, {})}))
