@@ -34,12 +34,12 @@ run = lambda name, args: "\n".join(c.text for c in asyncio.run(dispatch(name, ar
 # Schemas
 for name, required in {"browser_read_page": ["tab_id"], "browser_find": ["tab_id", "query"], "browser_get_page_text": ["tab_id"],
                        "browser_wait_for": ["tab_id"], "browser_upload": ["tab_id", "paths"]}.items():
-    s = REGISTRY[name].tool.inputSchema
+    s = REGISTRY[name].tool.input_schema
     assert s["required"] == required, (name, s["required"])
     assert "profile" in s["properties"], name
-assert "ref" in REGISTRY["browser_action"].tool.inputSchema["properties"]
+assert "ref" in REGISTRY["browser_action"].tool.input_schema["properties"]
 for name in ("browser_read_page", "browser_wait_for", "browser_upload"):
-    assert "ref" in REGISTRY[name].tool.inputSchema["properties"], name
+    assert "ref" in REGISTRY[name].tool.input_schema["properties"], name
 print("PASS schemas")
 
 # read_page / find / text formatting and payloads
