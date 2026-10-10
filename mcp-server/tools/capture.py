@@ -66,7 +66,7 @@ def screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "j
         if result.get("truncated"):
             note = (f", truncated to {result['tileHeight']}px of {result['pageHeight']}: pass tile=true for all of it "
                     f"or clip/selector for one part")
-        return [ImageContent(type="image", data=result["data"], mimeType=f"image/{fmt}"),
+        return [ImageContent(type="image", data=result["data"], mime_type=f"image/{fmt}"),
                 text(f"Saved {path} ({kb} KB, {_describe(result)}{note})")]
 
     # Tiled full page: one extension call per tile so each gets its own render + timeout
@@ -78,7 +78,7 @@ def screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "j
         tile_path = f"{stem}_{n}{suffix or '.' + ext}"
         kb = _save(result, tile_path)
         y0 = result["tileY"]
-        out.append(ImageContent(type="image", data=result["data"], mimeType=f"image/{fmt}"))
+        out.append(ImageContent(type="image", data=result["data"], mime_type=f"image/{fmt}"))
         lines.append(f"tile {n}: y {y0}-{y0 + result['tileHeight']} → {tile_path} ({kb} KB)")
         next_y = y0 + result["tileHeight"]
         if next_y >= page_height:

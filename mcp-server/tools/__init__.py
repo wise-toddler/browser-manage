@@ -30,7 +30,7 @@ REGISTRY: dict[str, Entry] = {}
 def tool(name: str, description: str, input_schema: dict):
     """Register an async handler(args) -> list[content] under `name`."""
     def register(fn):
-        REGISTRY[name] = Entry(Tool(name=name, description=description, inputSchema=input_schema), fn)
+        REGISTRY[name] = Entry(Tool(name=name, description=description, input_schema=input_schema), fn)
         return fn
     return register
 

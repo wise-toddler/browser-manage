@@ -50,7 +50,7 @@ async def browser_batch(args):
         elif name not in REGISTRY:
             result = [text(f"Error: unknown tool {name!r}")]
         else:
-            if profile and "profile" not in step_args and "profile" in REGISTRY[name].tool.inputSchema.get("properties", {}):
+            if profile and "profile" not in step_args and "profile" in REGISTRY[name].tool.input_schema.get("properties", {}):
                 step_args["profile"] = profile
             result = await dispatch(name, step_args)
         bad = is_error(name, result)
