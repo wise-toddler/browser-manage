@@ -15,6 +15,10 @@ export function withTimeout(p, ms, label) {
 // which kills every CDP tool on that tab; callers fall back to debugger-free APIs
 export const isForeignFrameError = e => /URL of different extension/.test(e?.message || '');
 
+// Pages the browser keeps every extension out of (no debugger, no scripts): its own pages and the web stores
+const BROWSER_PAGE_RE = /^(chrome|edge|devtools|view-source|chrome-untrusted|about):|^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|microsoftedge\.microsoft\.com\/addons)/;
+export const isBrowserPage = url => !!url && url !== 'about:blank' && BROWSER_PAGE_RE.test(url);
+
 export function getDomainFromUrl(url) {
   try { return new URL(url).hostname.replace('www.', ''); } catch { return ''; }
 }

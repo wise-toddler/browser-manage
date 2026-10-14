@@ -1,7 +1,6 @@
 """Tab listing, closing, grouping, opening, memory/activity and suspension tools."""
 
 import json
-from urllib.parse import urlparse
 
 from ipc import send_extension_command
 from tools import tool, schema, dispatch, text, as_json, ext_result, ext_error, TAB_IDS
@@ -153,7 +152,7 @@ async def close_by_ids(args):
     return [text(f"Closed {len(tab_ids)} tabs")]
 
 
-@tool("browser_open_tabs", "Open URLs as new background tabs (http/https only). Optionally add them to a named group (reuses an existing group with that name). Returns the new tabs as JSON [{tab_id, url, group_id}] after the summary line.", schema({
+@tool("browser_open_tabs", "Open URLs as new background tabs (any URL the browser accepts, incl. edge://, chrome:// and extension pages; the browser lets no extension read or click its own pages). Optionally add them to a named group (reuses an existing group with that name). Returns the new tabs as JSON [{tab_id, url, group_id}] after the summary line.", schema({
     "urls": {"type": "array", "description": "URLs to open", "items": {"type": "string"}},
     "group": {"type": "string", "description": "Optional group name to put the new tabs in"},
     "color": {"type": "string", "description": "Group color if a new group is created", "default": "blue"},
@@ -162,10 +161,9 @@ async def close_by_ids(args):
 }, ["urls"]))
 async def open_tabs(args):
     profile, urls = args.get("profile"), args.get("urls", [])
-    # Only web URLs: no javascript:, file:, chrome: etc.
-    bad = [u for u in urls if urlparse(u).scheme not in ("http", "https")]
-    if not urls or bad:
-        return [text(f"Error: urls must be a non-empty list of http/https URLs. Rejected: {bad}")]
+    # Any scheme: an agent with a shell can open edge:// anyway (stealing focus, wrong profile); the browser rejects what it can't open
+    if not urls or not all(isinstance(u, str) and u for u in urls):
+        return [text("Error: urls must be a non-empty list of URL strings")]
     payload = {"urls": urls, "active": args.get("active", False), "allowFocus": args.get("allow_focus", False)}
     result = send_extension_command("openTabs", payload, profile=profile)
     if (err := ext_error(result)):
