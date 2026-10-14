@@ -22,7 +22,7 @@ globalThis.chrome = {
     update: async (id, props) => { calls.push(['tabs.update', id, props]); return { id, windowId: 1 }; },
     create: async (props) => { calls.push(['tabs.create', props]); return { id: 99 }; },
     move: async (id, props) => { calls.push(['tabs.move', id, props]); },
-    get: async id => ({ id, windowId: 1, url: 'https://example.com/' }),
+    get: async id => ({ id, windowId: 1, url: id === 6 ? 'edge://settings/system/managePerformance' : 'https://example.com/' }),
   },
   windows: {
     get: async id => ({ id }),
@@ -82,6 +82,20 @@ assert.strictEqual(focusCalls().length, 0, 'agent restore must not focus');
 calls.length = 0;
 await dispatch('restoreFromTriage', { tabIds: [3] }, popup);
 assert.strictEqual(focusCalls().length, 2);
+
+// Browser pages: openTabs passes any scheme through; in-page actions get a clear refusal, tab-level ones still run
+r = await dispatch('openTabs', { urls: ['edge://settings/system/managePerformance'] }, native);
+assert.strictEqual(r.opened, 1);
+for (const [a, p] of [['screenshot', {}], ['readPage', {}], ['runScript', { code: '1' }], ['action', { action: 'click', ref: 1 }]]) {
+  r = await dispatch(a, { tabId: 6, ...p }, native);
+  assert.ok(r.browserPage && /browser page/.test(r.error), `${a} on edge:// should be refused clearly`);
+}
+calls.length = 0;
+r = await dispatch('action', { tabId: 6, action: 'navigate', url: 'https://example.com/' }, native);
+assert.ok(!r.browserPage, 'navigating away from a browser page is allowed');
+const { isBrowserPage } = await import('./src/util.js');
+assert.deepStrictEqual(['edge://newtab/', 'chrome://settings', 'about:blank', 'https://chromewebstore.google.com/detail/x', 'https://github.com/'].map(isBrowserPage),
+  [true, true, false, true, false]);
 
 // P1 page actions
 for (const a of ['readPage', 'findInPage', 'getPageText', 'waitFor', 'uploadFiles']) assert(typeof ACTIONS[a] === 'function', `missing action ${a}`);

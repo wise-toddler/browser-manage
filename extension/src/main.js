@@ -1,5 +1,5 @@
 // Service worker entry: native port, one action registry shared by the native host and the popup, alarms
-import { focusBlocked } from './util.js';
+import { focusBlocked, isBrowserPage } from './util.js';
 import { doAction } from './actions.js';
 import { screenshotTab } from './capture.js';
 import { runScript, getScriptInfo } from './script.js';
@@ -84,10 +84,26 @@ export const ACTIONS = {
   },
 };
 
+// Actions that work inside the page; on a browser page they'd only hit the browser's refusal (or hang)
+const IN_PAGE = new Set(['screenshot', 'action', 'runScript', 'readPage', 'findInPage', 'getPageText', 'waitFor', 'uploadFiles',
+  'debugCapture', 'readConsole', 'readNetwork', 'setViewport']);
+const TAB_LEVEL_ACTIONS = new Set(['navigate', 'back', 'forward', 'activate']);
+
+async function browserPageError(action, payload) {
+  if (!IN_PAGE.has(action) || typeof payload.tabId !== 'number') return null;
+  if (action === 'action' && TAB_LEVEL_ACTIONS.has(payload.action)) return null;
+  const tab = await chrome.tabs.get(payload.tabId).catch(() => null);
+  const url = tab && (tab.url || tab.pendingUrl);
+  if (!isBrowserPage(url)) return null;
+  return { error: `${url.slice(0, 80)} is a browser page: browsers let no extension read, screenshot or click their own pages (settings, new tab, web store). Ask the user to do it there, set it by browser policy, or navigate the tab elsewhere.`, browserPage: true };
+}
+
 export async function dispatch(action, payload = {}, ctx = { source: 'native' }) {
   const handler = ACTIONS[action];
   if (!handler) return { error: `Unknown action: ${action}` };
   try {
+    const blocked = await browserPageError(action, payload);
+    if (blocked) return blocked;
     return await handler(payload, ctx);
   } catch (err) {
     return { error: err.message };
