@@ -5,7 +5,7 @@ import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse
 
 
 # --- Personalized cleanup patterns ---
@@ -176,15 +176,7 @@ def extract_features_server_side(tab: dict, tracking: dict, all_tracking: dict) 
     # Fallback: extract domain from tab URL if tracking has none
     if not domain:
         tab_url = tab.get('url', '')
-        # Resolve suspended tab URLs to original domain
-        if 'suspended' in tab_url and ('chrome-extension://' in tab_url or 'extension://' in tab_url):
-            frag = tab_url.split('#', 1)[1] if '#' in tab_url else ''
-            params = dict(p.split('=', 1) for p in frag.split('&') if '=' in p)
-            orig = params.get('uri', params.get('url', ''))
-            if orig:
-                domain = urlparse(unquote(orig)).hostname or ''
-                domain = domain.replace('www.', '')
-        if not domain and tab_url:
+        if tab_url:
             domain = urlparse(tab_url).hostname or ''
             domain = domain.replace('www.', '')
     domain_count = sum(1 for t in all_tracking.values() if isinstance(t, dict) and t.get('domain') == domain) if domain else 1
@@ -223,7 +215,6 @@ def categorize_tabs(tabs: list, check_prs: bool = True) -> dict:
         'new_tabs': [],        # safe to close
         'one_time': [],        # suggest close
         'search_results': [],  # suggest close
-        'suspended': [],       # info only
         'grouped': [],         # skip
         'duplicates': [],      # close extras
         'keep': [],            # remaining
@@ -238,11 +229,6 @@ def categorize_tabs(tabs: list, check_prs: bool = True) -> dict:
         url = t.get('url', '')
         title = t.get('title', '')
         is_grouped = t.get('groupId', -1) != -1
-
-        # Suspended (chrome-extension:// on Chrome, extension:// on Edge)
-        if ('chrome-extension://' in url or 'extension://' in url) and 'suspended' in url:
-            categories['suspended'].append(t)
-            continue
 
         # Grouped tabs — skip
         if is_grouped:

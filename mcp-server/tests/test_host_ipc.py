@@ -42,7 +42,6 @@ def fake_result(action, payload):
         "openTabs": {"opened": 1, "tabIds": [1]},
         "screenshot": {"data": TINY_JPEG, "format": "jpeg", "fullPage": False},
         "action": {"ok": True, "url": "https://example.com/"},
-        "triageTabs": {"triaged": 1},
         "reloadExtension": {"reloading": True},
         "readConsole": {"total": 0, "matched": 0, "messages": []},
         "readNetwork": {"total": 0, "matched": 0, "requests": []},
@@ -143,16 +142,14 @@ def main():
     print("PASS file-IPC fallback (no sock, and sock path missing)")
 
     names = [t.name for t in asyncio.run(server.list_tools())]
-    assert len(names) == 40, len(names)  # 28 from P0 + 5 page (P1) + 5 debug/batch/record (P2) + set_viewport + close_group (feedback)
+    assert len(names) == 32, len(names)  # 20 from P0 + 5 page (P1) + 5 debug/batch/record (P2) + set_viewport + close_group (feedback)
     shot = os.path.join(TMP, "shot.jpg")
     args = {
-        "browser_create_group": {"name": "G", "tab_ids": [1]}, "browser_suspend_tabs": {"tab_ids": [1]},
-        "browser_unsuspend_tabs": {"tab_ids": [1]}, "browser_suspend_whitelist": {"action": "list"},
+        "browser_create_group": {"name": "G", "tab_ids": [1]},
         "browser_search_all_tabs": {"query": "example"}, "browser_smart_cleanup": {"check_prs": False},
         "browser_close_by_ids": {"tab_ids": [1]}, "browser_open_tabs": {"urls": ["https://example.com/"], "group": "G"},
         "browser_run_script": {"tab_id": 1, "code": "1"}, "browser_screenshot": {"tab_id": 1, "path": shot},
         "browser_action": {"tab_id": 1, "action": "scroll", "screenshot": False},
-        "browser_triage_tabs": {"tab_ids": [1]}, "browser_restore_from_triage": {"tab_ids": [1]},
         "browser_debug": {"tab_id": 1}, "browser_read_console": {"tab_id": 1}, "browser_read_network": {"tab_id": 1},
         "browser_batch": {"actions": [{"tool": "browser_get_tabs_ext", "args": {}}]}, "browser_record": {"tab_id": 1, "action": "start"},
         "browser_read_page": {"tab_id": 1}, "browser_find": {"tab_id": 1, "query": "more"}, "browser_get_page_text": {"tab_id": 1},

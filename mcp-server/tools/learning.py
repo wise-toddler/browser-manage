@@ -43,7 +43,7 @@ async def smart_cleanup(args):
     report["safe_to_close_ids"] = safe_to_close
     report["safe_to_close_count"] = len(safe_to_close)
     # Info sections
-    for cat in ['open_prs', 'suspended', 'grouped', 'keep']:
+    for cat in ['open_prs', 'grouped', 'keep']:
         if cats[cat]:
             report[f"{cat}_count"] = len(cats[cat])
     # Add predictions for kept tabs

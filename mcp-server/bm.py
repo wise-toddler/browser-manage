@@ -111,7 +111,7 @@ def cmd_seed_kept(profile):
     for t in tabs:
         url = t.get('url', '')
         # Skip internal pages
-        if url.startswith('chrome://') or url.startswith('edge://') or 'suspended' in url:
+        if url.startswith('chrome://') or url.startswith('edge://'):
             continue
         if 'chrome-extension://' in url or 'extension://' in url:
             continue

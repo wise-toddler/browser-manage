@@ -1,8 +1,6 @@
 // --- Tab time tracking, decision log, domain stats, periodic checkpoint ---
 import { getDomainFromUrl } from './util.js';
-import { isSuspendedTab, parseSuspendedUrl } from './suspend.js';
 import { getTabs } from './tabs.js';
-import { triageTabs } from './triage.js';
 
 // All mutable module state lives here; storage writes go only through the Persistence section below
 const state = {
@@ -22,15 +20,6 @@ export function markExtensionClosing(tabIds) {
   tabIds.forEach(id => state.extensionClosing.add(id));
 }
 
-// Resolve domain for suspended tabs by extracting original URL
-function resolveTrackingDomain(url) {
-  if (isSuspendedTab(url)) {
-    const parsed = parseSuspendedUrl(url);
-    if (parsed.originalUrl) return getDomainFromUrl(parsed.originalUrl);
-  }
-  return getDomainFromUrl(url);
-}
-
 // Skip internal/noise pages from decision logging
 function isTrackableDomain(domain) {
   if (!domain) return false;
@@ -43,7 +32,7 @@ function isTrackableDomain(domain) {
 function newTrackingEntry(tab) {
   const now = Date.now();
   const url = tab.pendingUrl || tab.url || '';
-  const domain = isSuspendedTab(url) ? resolveTrackingDomain(url) : getDomainFromUrl(url);
+  const domain = getDomainFromUrl(url);
   const openerDomain = tab.openerTabId ? (state.tabTracking[tab.openerTabId]?.domain || '') : '';
   return {
     createdAt: now, lastVisitedAt: now,
@@ -309,7 +298,7 @@ export async function getStaleTabs(thresholdHours = 2) {
   });
 }
 
-// Periodic checkpoint: tabs still alive = survived signal, trim the log, optional auto-triage
+// Periodic checkpoint: tabs still alive = survived signal, trim the log
 export async function runCheckpoint() {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
@@ -317,27 +306,5 @@ export async function runCheckpoint() {
     if (entry && entry.domain) updateDomainStatsSurvived(entry.domain);
   }
   // One write for all the survival bumps; the flush also trims the log
-  const log = await getDecisionLog();
-
-  // Auto-triage if enabled
-  const settings = await chrome.storage.local.get('autoTriageEnabled');
-  if (settings.autoTriageEnabled) {
-    const closed = log.filter(d => d.outcome === 'closed');
-    const kept = log.filter(d => d.outcome === 'kept');
-    if (closed.length >= 10 && kept.length >= 5) {
-      // Simple dispose check: tabs idle > 1 day + high dispose signal
-      const now = Date.now();
-      const idleThreshold = 24 * 60 * 60000; // 1 day
-      const toTriage = [];
-      for (const tab of tabs) {
-        const tr = state.tabTracking[tab.id];
-        if (!tr || !isTrackableDomain(tr.domain)) continue;
-        if (tab.pinned || tab.groupId !== -1) continue;
-        if ((now - tr.lastVisitedAt) > idleThreshold && (tr.activationCount || 0) <= 2) {
-          toTriage.push(tab.id);
-        }
-      }
-      if (toTriage.length > 0) await triageTabs(toTriage);
-    }
-  }
+  await flushDecisions();
 }

@@ -1,7 +1,5 @@
 // --- Tab listing, open/close/group, memory, and the popup's pending-changes preview ---
 import { withDebugger } from './cdp.js';
-import { getTriageWindowId } from './triage.js';
-import { isSuspendedTab } from './suspend.js';
 import { markExtensionClosing } from './tracking.js';
 
 // Known memory-heavy URL patterns
@@ -32,8 +30,7 @@ function checkMemoryHog(url) {
 
 export async function getTabs() {
   const windows = await chrome.windows.getAll({});
-  const triageWin = await getTriageWindowId();
-  const normalWindowIds = new Set(windows.filter(w => w.type === 'normal' && w.id !== triageWin).map(w => w.id));
+  const normalWindowIds = new Set(windows.filter(w => w.type === 'normal').map(w => w.id));
 
   const tabs = await chrome.tabs.query({});
   const groups = await chrome.tabGroups.query({});
@@ -84,11 +81,10 @@ export async function getTabsWithMemory() {
     const memoryMb = await getTabMemoryViaDebugger(tab.id);
     totalMemory += memoryMb;
     const hogInfo = checkMemoryHog(tab.url);
-    const suspended = isSuspendedTab(tab.url);
     // Flag as hog if URL pattern matches OR actual memory exceeds 100MB
     const isHog = hogInfo.hog || memoryMb > 100;
     const hogReason = hogInfo.hog ? hogInfo.reason : (memoryMb > 100 ? `High memory: ${memoryMb}MB` : null);
-    return { ...tab, memory_mb: memoryMb, hog: isHog, hog_reason: hogReason, suspended };
+    return { ...tab, memory_mb: memoryMb, hog: isHog, hog_reason: hogReason };
   }));
 
   // Sort by memory descending
@@ -109,12 +105,11 @@ export async function closeTabs(tabIds) {
   return { closed: tabIds.length };
 }
 
-// Open URLs in the main (non-triage) window, in the background unless active is set (callers gate focus)
+// Open URLs in the focused normal window (else any normal one), in the background unless active is set (callers gate focus)
 export async function openTabs(urls, active) {
   if (!urls || urls.length === 0) return { error: 'No URLs provided' };
-  const triageWin = await getTriageWindowId();
   const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
-  const win = windows.find(w => w.id !== triageWin && w.focused) || windows.find(w => w.id !== triageWin);
+  const win = windows.find(w => w.focused) || windows[0];
   const tabIds = [], tabs = [];
   for (const url of urls) {
     const tab = await chrome.tabs.create({ url, active: false, ...(win ? { windowId: win.id } : {}) });

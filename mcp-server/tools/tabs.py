@@ -1,4 +1,4 @@
-"""Tab listing, closing, grouping, opening, memory/activity and suspension tools."""
+"""Tab listing, closing, grouping, opening and memory/activity tools."""
 
 import json
 
@@ -109,34 +109,6 @@ async def get_tab_activity(args):
 }))
 async def get_stale_tabs(args):
     return ext_result(send_extension_command("getStaleTabs", {"thresholdHours": args.get("threshold_hours", 2)}, profile=args.get("profile")))
-
-
-@tool("browser_list_suspended", "List all suspended tabs with their original URLs.", schema())
-async def list_suspended(args):
-    return ext_result(send_extension_command("listSuspended", {}, profile=args.get("profile")))
-
-
-@tool("browser_suspend_tabs", "Suspend tabs by tab IDs via Great Suspender. Respects whitelist.", schema({
-    "tab_ids": {**TAB_IDS, "description": "Chrome tab IDs to suspend"},
-}, ["tab_ids"]))
-async def suspend_tabs(args):
-    return ext_result(send_extension_command("suspendTabs", {"tabIds": args.get("tab_ids", [])}, profile=args.get("profile")))
-
-
-@tool("browser_unsuspend_tabs", "Unsuspend (restore) suspended tabs by tab IDs.", schema({
-    "tab_ids": {**TAB_IDS, "description": "Chrome tab IDs to restore"},
-}, ["tab_ids"]))
-async def unsuspend_tabs(args):
-    return ext_result(send_extension_command("unsuspendTabs", {"tabIds": args.get("tab_ids", [])}, profile=args.get("profile")))
-
-
-@tool("browser_suspend_whitelist", "Manage domains exempt from suspension. Actions: list, add, remove.", schema({
-    "action": {"type": "string", "description": "list, add, or remove", "enum": ["list", "add", "remove"]},
-    "domains": {"type": "array", "description": "Domains to add/remove", "items": {"type": "string"}},
-}, ["action"]))
-async def suspend_whitelist(args):
-    payload = {"action": args.get("action", "list"), "domains": args.get("domains", [])}
-    return ext_result(send_extension_command("suspendWhitelist", payload, profile=args.get("profile")))
 
 
 @tool("browser_close_by_ids", "Close specific tabs by their Chrome tab IDs.", schema({
