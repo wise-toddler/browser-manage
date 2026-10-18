@@ -13,7 +13,7 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
                      File IPC (per-profile)                    Chrome APIs
                           ▼                                         ▼
               /tmp/tab-manager-{browser}-{profile}-*.json    tabs, groups,
-              /tmp/tab-manager-registry.json                 memory, suspend
+              /tmp/tab-manager-registry.json                 memory, debugger
 ```
 
 ## Available MCP Tools
@@ -30,11 +30,6 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
 | **Time Tracking** | | |
 | `browser_get_tab_activity` | Open duration, last visited, idle time per tab | Extension |
 | `browser_get_stale_tabs` | Find tabs idle longer than threshold | Extension |
-| **Suspend/Resume** | | |
-| `browser_list_suspended` | List suspended tabs with original URLs | Extension |
-| `browser_suspend_tabs` | Suspend tabs (auto-detects Great Suspender) | Extension |
-| `browser_unsuspend_tabs` | Restore suspended tabs | Extension |
-| `browser_suspend_whitelist` | Manage never-suspend domains | Extension |
 | **Multi-Profile** | | |
 | `browser_list_profiles` | List all connected browser profiles | Registry |
 | `browser_search_all_tabs` | Search tabs across all profiles | Extension |
@@ -57,7 +52,7 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
 | `browser_record` | Record screenshots of a tab's actions, export GIF | Server |
 | `browser_reload_extension` | Reload extension code from disk | Extension |
 
-Focus-changing calls (`activate`, `restore_from_triage`, `open_tabs active=true`) need `allow_focus=true`.
+Focus-changing calls (`activate`, `open_tabs active=true`) need `allow_focus=true`.
 
 All extension-based tools accept an optional `--profile` parameter to target a specific browser profile.
 
@@ -110,10 +105,6 @@ Tabs are flagged as memory hogs via two methods:
 - **URL patterns**: Known heavy sites (GCP Logs, BigQuery, Figma, IDEs, monitoring tools)
 - **Actual memory**: Tabs using >100MB JS heap (measured via Chrome Debugger API)
 
-## Great Suspender Integration
-
-Auto-detects the Great Suspender extension (any version/fork) by scanning installed extensions via `chrome.management` API. No hardcoded extension IDs.
-
 ## Files
 
 ```
@@ -123,14 +114,14 @@ browser-manage/
 │   ├── src/main.js            # native port + the single action registry (native + popup)
 │   ├── src/cdp.js             # shared debugger sessions (refcounted, idle detach, pin)
 │   ├── src/page.js            # self-contained in-page functions (serialized into tabs)
-│   ├── src/{actions,capture,script,tabs,suspend,triage,tracking,util}.js
+│   ├── src/{actions,capture,script,tabs,tracking,util}.js
 │   ├── preview.html/js        # popup
 │   └── *.test.js / *.test.mjs # node tests, no deps
 ├── native-host/host.py        # native messaging <-> Unix socket (/tmp/tab-manager-<profile>.sock)
 └── mcp-server/
     ├── server.py              # thin: lists/dispatches from the tool registry
     ├── ipc.py                 # profile registry + socket transport (file IPC fallback)
-    ├── tools/                 # @tool modules: tabs, profiles, learning, script, capture, actions, triage
+    ├── tools/                 # @tool modules: tabs, profiles, learning, script, capture, actions
     ├── analysis.py            # cleanup categories, PR status, dispose classifier
     └── tests/test_host_ipc.py
 ```

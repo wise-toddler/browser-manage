@@ -16,7 +16,6 @@ import tools.script  # noqa: F401
 import tools.capture  # noqa: F401
 import tools.actions  # noqa: F401
 import tools.page  # noqa: F401
-import tools.triage  # noqa: F401
 # P2 debug
 import tools.debug  # noqa: F401
 import tools.batch  # noqa: F401

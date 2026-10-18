@@ -7,8 +7,6 @@ import {
   getTabs, getTabsWithMemory, getTabMemoryViaDebugger, closeTabs, openTabs, createGroup, addToGroup,
   previewChanges, applyChanges, getPendingChanges, setPendingChanges,
 } from './tabs.js';
-import { listSuspendedTabs, suspendTabs, unsuspendTabs, updateWhitelist } from './suspend.js';
-import { triageTabs, restoreFromTriage, listTriageTabs } from './triage.js';
 import {
   getTabTracking, getTabActivity, getStaleTabs, getDecisionLog, getDomainStats, recordCleanupResult, runCheckpoint,
 } from './tracking.js';
@@ -42,17 +40,9 @@ export const ACTIONS = {
   applyChanges: () => applyChanges(),
   getTabActivity: () => getTabActivity(),
   getStaleTabs: p => getStaleTabs(p.thresholdHours || 2),
-  listSuspended: () => listSuspendedTabs(),
-  suspendTabs: p => suspendTabs(p.tabIds),
-  unsuspendTabs: p => unsuspendTabs(p.tabIds),
-  suspendWhitelist: p => updateWhitelist(p.action, p.domains || []),
   getDecisionLog: async () => ({ data: await getDecisionLog() }),
   getDomainStats: async () => ({ data: await getDomainStats() }),
   getTabTracking: () => ({ data: getTabTracking() }),
-  triageTabs: p => triageTabs(p.tabIds),
-  // Tabs always move back; activating them and focusing the window is gated for agents
-  restoreFromTriage: (p, ctx) => restoreFromTriage(p.tabIds, !focusBlocked(p, ctx, 'restore_from_triage focus')),
-  listTriageTabs: () => listTriageTabs(),
   recordCleanupResult: p => recordCleanupResult(p.kept || [], p.closed || []),
   // The reply is sent as soon as this resolves; the reload fires after, so the caller still gets an ack
   // (the port then dies with the worker and the host exits on EOF)
@@ -76,12 +66,6 @@ export const ACTIONS = {
   // popup / extension pages
   getPendingChanges: () => getPendingChanges(),
   updatePendingChanges: p => { setPendingChanges(p.changes); return { ok: true }; },
-  suspendStaleTabs: p => suspendTabs(p.tabIds),
-  // From suspended.html: navigate that tab back in place, staying in its window
-  unsuspendCurrent: (p, ctx) => {
-    chrome.tabs.update(ctx.sender.tab.id, { url: p.url });
-    return { ok: true };
-  },
 };
 
 // Actions that work inside the page; on a browser page they'd only hit the browser's refusal (or hang)
@@ -154,7 +138,7 @@ function connectNative() {
   }
 }
 
-// Messages from the popup and other extension pages (suspended.html). Unknown actions get no reply,
+// Messages from the popup and other extension pages. Unknown actions get no reply,
 // and a failing handler replies with nothing, as before (preview.js treats a missing reply as empty)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = ACTIONS[message?.action];

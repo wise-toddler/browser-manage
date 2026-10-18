@@ -50,14 +50,14 @@ browser-manage/
 │   ├── src/main.js            # native port + the single action registry (native + popup)
 │   ├── src/cdp.js             # shared debugger sessions (refcounted, idle detach, pin)
 │   ├── src/page.js            # self-contained in-page functions (serialized into tabs)
-│   ├── src/{actions,capture,script,tabs,suspend,triage,tracking,util}.js
+│   ├── src/{actions,capture,script,tabs,tracking,util}.js
 │   ├── preview.html/js        # popup
 │   └── *.test.js / *.test.mjs # node tests, no deps
 ├── native-host/host.py        # native messaging <-> Unix socket (/tmp/tab-manager-<profile>.sock)
 └── mcp-server/
     ├── server.py              # thin: lists/dispatches from the tool registry
     ├── ipc.py                 # profile registry + socket transport (file IPC fallback)
-    ├── tools/                 # @tool modules: tabs, profiles, learning, script, capture, actions, triage
+    ├── tools/                 # @tool modules: tabs, profiles, learning, script, capture, actions
     ├── analysis.py            # cleanup categories, PR status, dispose classifier
     └── tests/test_host_ipc.py
 ```
@@ -88,12 +88,6 @@ browser-manage/
 - [x] Last visited timestamp per tab
 - [x] Auto-detect stale tabs (not visited in X hours)
 - [x] Session duration analytics
-
-### v1.3 - Great Suspender Integration
-- [x] Detect suspended tabs (chrome-extension:// URLs)
-- [x] Suspend inactive tabs via Great Suspender API
-- [x] Whitelist domains from auto-suspend
-- [x] Bulk suspend/unsuspend by group
 
 ### v1.4 - Multi-Browser & Multi-Profile Support
 - [x] Support Chrome, Edge (via native messaging + per-profile IPC)

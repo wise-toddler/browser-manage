@@ -1,6 +1,6 @@
 ---
 name: browser-manage
-description: Manage browser tabs across Chrome and Edge profiles. Clean stale tabs, check memory, suspend/unsuspend tabs, group tabs, detect duplicates. Trigger on "clean tabs", "browser tabs", "tab cleanup", "stale tabs", "memory hogs", "suspend tabs".
+description: Manage browser tabs across Chrome and Edge profiles. Clean stale tabs, check memory, group tabs, detect duplicates. Trigger on "clean tabs", "browser tabs", "tab cleanup", "stale tabs", "memory hogs".
 ---
 
 # Browser Manager
@@ -24,12 +24,6 @@ Manage tabs across all connected Chrome and Edge profiles via the `browser-manag
 - `browser_get_tab_activity` — open duration, last visited, idle time per tab
 - `browser_get_stale_tabs` — tabs idle longer than threshold (default 2hrs)
 
-### Suspend/Resume (Great Suspender)
-- `browser_list_suspended` — list suspended tabs with original URLs
-- `browser_suspend_tabs` — suspend tabs by ID (respects whitelist)
-- `browser_unsuspend_tabs` — restore suspended tabs
-- `browser_suspend_whitelist` — manage never-suspend domains (list/add/remove)
-
 ### Multi-Profile
 - `browser_list_profiles` — list all connected browser profiles
 - `browser_search_all_tabs` — search tabs across all profiles by query
@@ -50,7 +44,6 @@ mcp-call browser-manage browser_get_tabs_ext --profile=edge-54f24d93
 mcp-call browser-manage browser_get_memory --profile=edge-59a2f80d
 mcp-call browser-manage browser_get_stale_tabs --threshold_hours=1
 mcp-call browser-manage browser_search_all_tabs --query=github
-mcp-call browser-manage browser_suspend_whitelist --action=list
 ```
 
 ## Cleanup Workflow
@@ -60,7 +53,6 @@ mcp-call browser-manage browser_suspend_whitelist --action=list
 3. `browser_smart_cleanup` — get suggestions
 4. Confirm with user before closing
 5. `browser_get_memory` — check memory hogs
-6. `browser_suspend_tabs` — suspend heavy tabs instead of closing
 
 ## Rules
 - Always ask before closing tabs

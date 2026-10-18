@@ -2,9 +2,7 @@
 let allTabs = [];
 let memoryData = null;
 let staleData = [];
-let suspendedData = [];
 let disposableData = [];
-let triageData = [];
 let pendingChanges = null;
 let tabTrackingData = {};
 let currentView = 'all';
@@ -13,8 +11,6 @@ let toastTimer = null;
 const STALE_THRESHOLD_HOURS = 2;
 // Hogs view fallback before memory loads (src/tabs.js has the worker's own list)
 const HOG_URL_PATTERNS = ['console.cloud.google.com', 'bigquery', 'figma.com', 'sentry.io', 'datadoghq.com', 'colab.research', 'vscode.dev', 'github.dev'];
-// Our own or Great Suspender's suspended page (same pattern as src/suspend.js)
-const SUSPENDED_RE = /^(?:chrome-extension|extension):\/\/[a-z]+\/suspended\.html/;
 // Close Duplicates also closes every new tab page
 const NEW_TAB_URLS = ['edge://newtab/', 'chrome://newtab/', 'about:newtab', 'about:blank'];
 const FEATURE_KEYS = ['ageMinutes','idleMinutes','activationCount','avgGapMinutes','maxGapMinutes','totalFocusMs','avgFocusPerVisit','sessionCount','domainTabCount','redirectCount'];
@@ -53,7 +49,7 @@ async function init() {
   }
 }
 
-// Re-fetch tabs and everything derived from them (Refresh, and after bulk actions)
+// Re-fetch tabs and everything derived from them (Refresh)
 async function reloadTabs() {
   allTabs = (await send('getTabs')) || [];
   renderStats();
@@ -65,8 +61,8 @@ async function reloadTabs() {
 async function loadExtendedData() {
   // These use the background script's internal functions via message passing
   try {
-    // Get tab tracking data, decision log and triage toggle state from storage
-    const store = await chrome.storage.local.get(['tabTracking', 'decisionLog', 'autoTriageEnabled']);
+    // Get tab tracking data and decision log from storage
+    const store = await chrome.storage.local.get(['tabTracking', 'decisionLog']);
     tabTrackingData = store.tabTracking || {};
     const decisionLog = store.decisionLog || [];
     staleData = findStale(allTabs, tabTrackingData);
@@ -74,17 +70,8 @@ async function loadExtendedData() {
     // Compute dispose predictions per tab
     disposableData = computeDisposable(allTabs, tabTrackingData, decisionLog);
 
-    // Load triage window tabs
-    triageData = (await send('listTriageTabs')) || [];
-
-    // Load triage toggle state
-    $('triage-toggle').checked = store.autoTriageEnabled || false;
-
     // Update learned stat
     $('stat-decisions').textContent = decisionLog.length;
-
-    // Detect suspended tabs
-    suspendedData = findSuspended(allTabs);
 
     updateTabCounts();
     // Re-render if on a filtered view
@@ -116,14 +103,6 @@ function findStale(tabs, tracking) {
   return tabs
     .filter(t => tracking[t.id] && (now - tracking[t.id].lastVisitedAt) > threshold)
     .map(t => ({ ...t, idle_mins: Math.round((now - tracking[t.id].lastVisitedAt) / 60000) }));
-}
-
-// Suspended tabs, with the original URL/title parsed from the page's hash
-function findSuspended(tabs) {
-  return tabs.filter(t => SUSPENDED_RE.test(t.url)).map(t => {
-    const params = new URLSearchParams(t.url.split('#')[1] || '');
-    return { ...t, original_url: params.get('uri') || params.get('url') || '', original_title: params.get('ttl') || params.get('title') || '' };
-  });
 }
 
 // Nearest centroid over the decision log: closer to past 'closed' than 'kept' tabs = disposable (> 0.6)
@@ -203,14 +182,12 @@ function findDuplicates(tabs) {
   return toClose;
 }
 
-// Forget tabs closed or triaged from here in every view, so they don't linger until the next refresh
+// Forget tabs closed from here in every view, so they don't linger until the next refresh
 function dropTabs(ids) {
   const keep = t => !ids.includes(t.id);
   allTabs = allTabs.filter(keep);
   staleData = staleData.filter(keep);
-  suspendedData = suspendedData.filter(keep);
   disposableData = disposableData.filter(keep);
-  triageData = triageData.filter(keep);
   if (memoryData?.tabs) memoryData.tabs = memoryData.tabs.filter(keep);
 }
 
@@ -236,7 +213,7 @@ function renderStatsLoading() {
 
 function updateTabCounts() {
   const hogs = (memoryData?.tabs || []).filter(t => t.hog).length;
-  const counts = { all: allTabs.length, hogs, stale: staleData.length, disposable: disposableData.length, triage: triageData.length, suspended: suspendedData.length };
+  const counts = { all: allTabs.length, hogs, stale: staleData.length, disposable: disposableData.length };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const count = counts[btn.dataset.view] || 0;
     const countEl = btn.querySelector('.count');
@@ -273,8 +250,6 @@ function tabsForView(view) {
       return allTabs.filter(t => HOG_URL_PATTERNS.some(p => t.url.includes(p)));
     case 'stale': return staleData;
     case 'disposable': return disposableData;
-    case 'triage': return triageData;
-    case 'suspended': return suspendedData;
     default: return allTabs;
   }
 }
@@ -295,10 +270,9 @@ function renderListMessage(text) {
 // Every untrusted string (title, URL/domain, group name) goes through escapeHtml, attributes included
 function tabItemHtml(t) {
   const disposable = disposableData.find(d => d.id === t.id);
-  const domain = getDomain(t.original_url || t.url);
+  const domain = getDomain(t.url);
   const favicon = `https://www.google.com/s2/favicons?sz=16&domain=${domain}`;
-  const title = t.original_title || t.title || 'Untitled';
-  const canTriage = currentView === 'disposable' || (currentView === 'all' && disposable);
+  const title = t.title || 'Untitled';
 
   return `
       <div class="tab-item" data-tab-id="${t.id}">
@@ -309,8 +283,6 @@ function tabItemHtml(t) {
         </div>
         <div class="meta">
           ${tabBadges(t, disposable).join('')}
-          ${currentView === 'triage' ? `<button class="btn-restore" data-tab-id="${t.id}" title="Restore to main">Keep</button>` : ''}
-          ${canTriage ? `<button class="btn-triage-tab" data-tab-id="${t.id}" title="Move to triage">Triage</button>` : ''}
           <button class="btn-close-tab" data-tab-id="${t.id}" title="Close tab">&times;</button>
         </div>
       </div>
@@ -345,9 +317,6 @@ function tabBadges(t, disposable) {
   if (t.groupInfo) {
     badges.push(`<span class="badge badge-group">${escapeHtml(t.groupInfo.title || t.groupInfo.color)}</span>`);
   }
-  if (t.original_url) {
-    badges.push(`<span class="badge badge-suspended">suspended</span>`);
-  }
   return badges;
 }
 
@@ -369,23 +338,6 @@ async function closeTab(tabId) {
   showToast('Tab closed');
 }
 
-// Restore from triage buttons
-async function keepTab(tabId) {
-  await send('restoreFromTriage', { tabIds: [tabId] });
-  triageData = triageData.filter(t => t.id !== tabId);
-  rerender();
-  showToast('Restored to main window');
-}
-
-// Triage buttons
-async function triageTab(tabId) {
-  await send('triageTabs', { tabIds: [tabId] });
-  dropTabs([tabId]);
-  triageData = (await send('listTriageTabs')) || [];
-  rerender();
-  showToast('Moved to triage');
-}
-
 // Click to activate tab
 function activateTab(tabId) {
   chrome.tabs.update(tabId, { active: true });
@@ -401,8 +353,6 @@ $('tab-list').addEventListener('click', (e) => {
   if (btn) {
     const tabId = parseInt(btn.dataset.tabId);
     if (btn.classList.contains('btn-close-tab')) closeTab(tabId);
-    else if (btn.classList.contains('btn-restore')) keepTab(tabId);
-    else if (btn.classList.contains('btn-triage-tab')) triageTab(tabId);
     return;
   }
   const item = e.target.closest('.tab-item');
@@ -449,40 +399,6 @@ $('btn-dupes').addEventListener('click', () => withBusy($('btn-dupes'), 'Finding
   rerender();
   showToast(`Closed ${toClose.length} duplicate tabs`);
 }));
-
-// Suspend stale tabs
-$('btn-suspend-stale').addEventListener('click', async () => {
-  if (staleData.length === 0) {
-    showToast('No stale tabs to suspend');
-    return;
-  }
-  await withBusy($('btn-suspend-stale'), 'Suspending...', async () => {
-    // Send suspend command to background
-    const result = await send('suspendStaleTabs', { tabIds: staleData.map(t => t.id) });
-    showToast(result?.error || `Suspended ${result?.suspended || 0} tabs`);
-    // Refresh, then re-render the list with the fresh tracking/memory data too
-    await reloadTabs();
-    rerender();
-  });
-});
-
-// Triage all disposable tabs
-$('btn-triage').addEventListener('click', async () => {
-  if (disposableData.length === 0) { showToast('No disposable tabs'); return; }
-  await withBusy($('btn-triage'), 'Triaging...', async () => {
-    const tabIds = disposableData.map(t => t.id);
-    await send('triageTabs', { tabIds });
-    await reloadTabs();
-    rerender();
-    showToast(`Triaged ${tabIds.length} tabs`);
-  });
-});
-
-// Auto-triage toggle
-$('triage-toggle').addEventListener('change', async (e) => {
-  await chrome.storage.local.set({ autoTriageEnabled: e.target.checked });
-  showToast(e.target.checked ? 'Auto-triage enabled' : 'Auto-triage disabled');
-});
 
 // Refresh
 $('btn-refresh').addEventListener('click', async () => {
