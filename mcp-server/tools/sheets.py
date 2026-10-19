@@ -38,6 +38,38 @@ def _dialog(tab_id: int, profile: str, accept_warning: bool):
     return r.get("result") if isinstance(r, dict) and isinstance(r.get("result"), dict) else None
 
 
+def _js(tab_id: int, profile: str, code: str):
+    """Run a small read-only snippet in the tab; its result, else None."""
+    r = send_extension_command("runScript", {"tabId": tab_id, "code": code}, timeout=30, profile=profile)
+    return r.get("result") if isinstance(r, dict) else None
+
+
+def _norm(ref) -> str:
+    """Cell ref as the name box shows it (F3 for $f$3)."""
+    return str(ref or "").replace("$", "").upper()
+
+
+def _write_cell(tab_id: int, profile: str, ref: str, value: str, accept: bool):
+    """Select ref via the name box, verified before and after Enter, then type value; why it stopped (dict), else None."""
+    def name_box():
+        return _norm(_js(tab_id, profile, "return document.querySelector('#t-name-box').value"))
+    _act(tab_id, profile, action="type", selector="#t-name-box", clear=True, text=ref)
+    if name_box() != _norm(ref):
+        # The keys went somewhere else (an open cell editor took them): cancel that edit, write nothing
+        _act(tab_id, profile, action="key", key="Escape")
+        return {"aborted": f"the name box didn't take {ref} (keys went elsewhere); nothing typed"}
+    _act(tab_id, profile, action="key", key="Enter")
+    if (d := _dialog(tab_id, profile, False)):
+        return {"dialog": d}
+    if (now := name_box()) != _norm(ref):
+        # Sheets picked another cell (a filter hides the row, or a merge): typing now would write the wrong cell
+        return {"aborted": f"Sheets selected {now} instead of {ref} (its row or column is hidden, by a filter or manually, or it is inside a merged cell); nothing typed"}
+    note = _act(tab_id, profile, action="type", selector="#waffle-rich-text-editor", text=f"{value}\n")
+    if (d := _dialog(tab_id, profile, accept)):
+        return None if d.get("accepted") else {"dialog": d}
+    return {"note": note} if note else None
+
+
 def _first_cell(csv_text: str) -> str:
     """The single value in a one-cell gviz CSV answer ('' for an empty cell or a gviz error answer)."""
     if (csv_text or "").lstrip().startswith(("{", "/*", "google.visualization")):
@@ -95,31 +127,32 @@ async def browser_sheets_write(args):
         return [text(f"Error: tab {tab_id} isn't a Google Sheet ({url[:80]})")]
     gid = (GID_RE.search(url) or [None, None])[1]
 
-    pending, got, notes, dialogs = list(cells), {}, {}, {}
+    # A basic filter hides rows; the name box can't select a hidden cell (it jumps to the next visible one)
+    filter_on = _js(tab_id, profile, "const t = document.querySelector('#t-autofilter-toggle'); return !!t && t.getAttribute('aria-pressed') === 'true'") is True
+    pending, got, stops = list(cells), {}, {}
     accept = bool(args.get("accept_protection_warning"))
     for _ in range(2):
         for ref in pending:
-            for step in ({"selector": "#t-name-box", "clear": True, "text": f"{ref}\n"},
-                         {"selector": "#waffle-rich-text-editor", "text": f"{cells[ref]}\n"}):
-                if (note := _act(tab_id, profile, action="type", **step)):
-                    notes[ref] = note
-                if (d := _dialog(tab_id, profile, accept)):
-                    dialogs[ref] = d
-                    if not d.get("accepted"):
-                        break
+            if (stop := _write_cell(tab_id, profile, ref, cells[ref], accept)):
+                stops[ref] = stop
+            else:
+                stops.pop(ref, None)
         await asyncio.sleep(SAVE_WAIT_S)
         read = _read(tab_id, profile, m[1], gid, pending)
         if isinstance(read, str):
             return [text(read)]
         got.update(read)
         pending = [ref for ref in pending if not _landed(cells[ref], got.get(ref, ""))]
-        # A refused edit (protection) refuses again: retry only the cells that hit no dialog
-        if not [ref for ref in pending if ref not in dialogs or dialogs[ref].get("accepted")]:
+        # Aborted cells and refusals would only repeat (and an abort must never turn into a guess): retry the rest
+        if not [ref for ref in pending if "aborted" not in stops.get(ref, {}) and "dialog" not in stops.get(ref, {})]:
             break
     report = {ref: {"value": cells[ref], "read_back": got.get(ref, ""), "landed": ref not in pending,
-                    **({"note": notes[ref]} if ref in notes and ref in pending else {}),
-                    **({"dialog": dialogs[ref]} if ref in dialogs else {})} for ref in cells}
+                    **(stops[ref] if ref in stops and ref in pending else {})} for ref in cells}
     summary = f"{len(cells) - len(pending)}/{len(cells)} cells landed" + (f"; NOT landed: {pending}" if pending else "")
-    if blocked := [ref for ref in pending if ref in dialogs and not dialogs[ref].get("accepted")]:
-        summary += f"; Sheets refused {blocked} with a dialog: {dialogs[blocked[0]]['text'][:160]}"
-    return [text(summary), text(json.dumps({"ok": not pending, "cells": report}))]
+    if aborted := [ref for ref in pending if "aborted" in stops.get(ref, {})]:
+        summary += f"; aborted (nothing written) {aborted}: {stops[aborted[0]]['aborted']}"
+    if blocked := [ref for ref in pending if "dialog" in stops.get(ref, {})]:
+        summary += f"; Sheets refused {blocked} with a dialog: {stops[blocked[0]]['dialog']['text'][:160]}"
+    if filter_on:
+        summary += "; a filter is on in this sheet tab: rows it hides can't be selected (filtered rows are also missing from the read-back)"
+    return [text(summary), text(json.dumps({"ok": not pending, "filter_on": filter_on, "cells": report}))]
