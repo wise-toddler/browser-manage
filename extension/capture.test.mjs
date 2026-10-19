@@ -170,6 +170,13 @@ try {
   assert.deepStrictEqual([ty.mode, ty.warning], ['cdp (tab hidden)', undefined]);
   assert.strictEqual(await evaluate(2, 'window.trusted.join("")'), 'hello', 'trusted, focused input reached the editor');
   assert.strictEqual(await evaluate(2, 'document.getElementById("ed").textContent'), 'hello');
+  // Keystrokes carry real key codes (keydown-driven apps), clear=true replaces a field's text, Enter types "\r"
+  await evaluate(2, 'window.keys = []; document.getElementById("k1").value = "old"; document.getElementById("k1").addEventListener("keydown", e => keys.push(e.code + ":" + e.keyCode)); document.getElementById("k1").addEventListener("keypress", e => keys.push("press:" + e.keyCode)); 1');
+  await doAction(2, { action: 'type', selector: '#k1', text: 'B7', clear: true, wait: 0 }, { source: 'native' });
+  assert.strictEqual(await evaluate(2, 'document.getElementById("k1").value'), 'B7');
+  await doAction(2, { action: 'key', key: 'Enter', wait: 0 }, { source: 'native' });
+  assert.deepStrictEqual(await evaluate(2, 'keys.filter(k => k !== "MetaLeft:91" && !k.startsWith("KeyA") && !k.startsWith("ControlLeft"))'),
+    ['ShiftLeft:16', 'KeyB:66', 'press:66', 'Digit7:55', 'press:55', 'Enter:13', 'press:13'].filter(k => k !== 'ShiftLeft:16'));
 
   // run_script: last expression, top-level await/return, a promise result is settled, timeouts fire
   fakeUrl = 'https://test.local/'; // runScript only runs on http(s) pages; the file:// page stands in for one
