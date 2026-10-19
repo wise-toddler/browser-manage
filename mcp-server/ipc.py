@@ -8,8 +8,6 @@ import uuid
 
 # TAB_MANAGER_DIR is only overridden by tests so they never touch the live hosts
 BASE_DIR = os.environ.get("TAB_MANAGER_DIR", "/tmp")
-CMD_FILE = os.path.join(BASE_DIR, "tab-manager-cmd.json")
-RESULT_FILE = os.path.join(BASE_DIR, "tab-manager-result.json")
 REGISTRY_FILE = os.path.join(BASE_DIR, "tab-manager-registry.json")
 FILE_POLL_S = 0.02
 TIMEOUT_ERROR = "timeout waiting for extension"
@@ -48,12 +46,13 @@ def send_to_entry(entry: dict, action: str, payload: dict, timeout: int = 10) ->
 
 
 def send_extension_command(action: str, payload: dict, timeout: int = 10, profile: str = None) -> dict:
-    """Send a command to the extension of `profile` (or the legacy default IPC files) and return its result."""
+    """Send a command to the extension of `profile` and return its result."""
+    active = [f"{p['browser']}-{p['profile']}" for p in get_active_profiles()]
+    # No default: with several profiles a guess acts on the wrong browser, and the old default IPC files had no reader
     if not profile:
-        return _send_to_ipc(action, payload, CMD_FILE, RESULT_FILE, timeout)
+        return {"error": f"no profile given: pass profile (--profile=...), one of {active}"}
     match = resolve_profile(profile)
     if not match:
-        active = [f"{p['browser']}-{p['profile']}" for p in get_active_profiles()]
         return {"error": f"Profile '{profile}' not found. Active: {active}"}
     result = send_to_entry(match, action, payload, timeout)
     if isinstance(result, dict) and result.get('error') == TIMEOUT_ERROR:

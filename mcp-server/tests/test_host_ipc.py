@@ -115,6 +115,11 @@ def main():
     assert r == {"hello": "world"}, r
     print("PASS socket round trip")
 
+    t0 = time.time()
+    r = ipc.send_extension_command("echo", {})
+    assert "no profile given" in r.get("error", "") and PROFILE in r["error"] and time.time() - t0 < 1, r
+    print("PASS no profile fails fast and lists the active ones")
+
     results = {}
     def worker(i):
         results[i] = ipc.send_extension_command("echo", {"n": i}, profile=PROFILE)
