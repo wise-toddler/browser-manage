@@ -92,6 +92,7 @@ assert tab_id_error({"tab_id": 5}) is None and tab_id_error({"tab_id": "5"}) == 
 print("PASS error helpers")
 
 assert _first_cell('"can\'t stop"') == "can't stop" and _first_cell("") == "" and _first_cell('"a,b"') == "a,b"
+assert _first_cell('{"version":"0.6","status":"error"}') == "" and _first_cell("/*O_o*/ google.visualization.Query.setResponse({})") == ""
 assert _landed("x", "x") and not _landed("x", "") and _landed("42", "42.0") and _landed("1,000", "1000")
 assert _landed("=2*21", "42") and not _landed("=1/0", "#DIV/0!") and not _landed("=A1", "")
 assert _landed("'=literal", "=literal") and not _landed("'=literal", "'=literal")
