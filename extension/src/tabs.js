@@ -44,7 +44,8 @@ export async function getTabs() {
     id: t.id,
     windowId: t.windowId,
     title: t.title,
-    url: t.url,
+    // A tab that's still loading its first page has no url yet, only pendingUrl
+    url: t.url || t.pendingUrl || '',
     groupId: t.groupId,
     groupInfo: t.groupId !== -1 ? groupMap[t.groupId] : null,
     // Callers must not close or wake these by accident: the tab in front, pinned ones, and unloaded ones
