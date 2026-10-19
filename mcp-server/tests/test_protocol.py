@@ -47,9 +47,9 @@ def main():
     print("PASS initialize negotiates 2025-11-25 (mcp-call's version)")
 
     tools = rpc.send("tools/list")["result"]["tools"]
-    assert len(tools) == 32, len(tools)
+    assert len(tools) == 33, len(tools)
     assert all("inputSchema" in t for t in tools), "wire format must stay camelCase"
-    print("PASS tools/list: 32 tools, camelCase inputSchema on the wire")
+    print("PASS tools/list: 33 tools, camelCase inputSchema on the wire")
 
     r = rpc.call("browser_list_profiles", {})
     assert not r.get("isError") and r["content"][0]["type"] == "text", r

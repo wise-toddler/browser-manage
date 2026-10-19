@@ -170,6 +170,17 @@ try {
   assert.deepStrictEqual([ty.mode, ty.warning], ['cdp (tab hidden)', undefined]);
   assert.strictEqual(await evaluate(2, 'window.trusted.join("")'), 'hello', 'trusted, focused input reached the editor');
   assert.strictEqual(await evaluate(2, 'document.getElementById("ed").textContent'), 'hello');
+  // type refuses a target that isn't an editable field (no silent ok), waits for one that shows up late, and
+  // warns when no input event reached the page
+  const bad = await doAction(2, { action: 'type', selector: '#hero', text: 'x', wait: 0 }, { source: 'native' });
+  assert.match(bad.error, /isn't an editable field.*Nothing was typed/);
+  await evaluate(2, 'setTimeout(() => { const i = document.createElement("input"); i.id = "late2"; document.body.append(i); }, 800), 1');
+  const late = await doAction(2, { action: 'type', selector: '#late2', text: 'ok', wait: 0 }, { source: 'native' });
+  assert.ok(!late.error && !late.warning, JSON.stringify(late));
+  assert.strictEqual(await evaluate(2, 'document.getElementById("late2").value'), 'ok');
+  await evaluate(2, 'document.activeElement.blur(), 1');
+  const lost = await doAction(2, { action: 'type', text: 'nowhere', wait: 0 }, { source: 'native' });
+  assert.match(lost.warning, /no input event reached the page/);
   // Keystrokes carry real key codes (keydown-driven apps), clear=true replaces a field's text, Enter types "\r"
   await evaluate(2, 'window.keys = []; document.getElementById("k1").value = "old"; document.getElementById("k1").addEventListener("keydown", e => keys.push(e.code + ":" + e.keyCode)); document.getElementById("k1").addEventListener("keypress", e => keys.push("press:" + e.keyCode)); 1');
   await doAction(2, { action: 'type', selector: '#k1', text: 'B7', clear: true, wait: 0 }, { source: 'native' });

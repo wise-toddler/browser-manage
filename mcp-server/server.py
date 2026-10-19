@@ -20,6 +20,7 @@ import tools.page  # noqa: F401
 import tools.debug  # noqa: F401
 import tools.batch  # noqa: F401
 import tools.record  # noqa: F401
+import tools.sheets  # noqa: F401
 from tools import REGISTRY, dispatch, text
 # Re-exported for bm.py and ad-hoc scripts that `import server`
 from ipc import send_extension_command, get_active_profiles  # noqa: F401

@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import server  # noqa: E402,F401  (registers every tool)
 import tools.page as page  # noqa: E402
 from tools import REGISTRY, dispatch, ext_error, ext_result, tab_id_error  # noqa: E402
+from tools.sheets import _landed, _first_cell  # noqa: E402
 
 sent = []
 
@@ -89,4 +90,10 @@ assert ext_error("oops", dict) == "Error: unexpected result: oops"
 assert ext_result({"error": "boom"})[0].text == "Error: boom" and ext_result([1])[0].text == "[\n  1\n]"
 assert tab_id_error({"tab_id": 5}) is None and tab_id_error({"tab_id": "5"}) == "Error: tab_id (integer) is required"
 print("PASS error helpers")
+
+assert _first_cell('"can\'t stop"') == "can't stop" and _first_cell("") == "" and _first_cell('"a,b"') == "a,b"
+assert _landed("x", "x") and not _landed("x", "") and _landed("42", "42.0") and _landed("1,000", "1000")
+assert _landed("=2*21", "42") and not _landed("=1/0", "#DIV/0!") and not _landed("=A1", "")
+assert _landed("'=literal", "=literal") and not _landed("'=literal", "'=literal")
+print("PASS sheets read-back checks")
 print("ALL PASS")

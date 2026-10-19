@@ -3,6 +3,23 @@
 
 // DOM-level input, used when real CDP input can't run: hidden tabs (Input.dispatch* waits for a frame
 // background tabs never produce) and tabs where the debugger is refused
+// type's target: focus it and report whether it really holds focus and takes text (self-contained: runs in the page)
+export function focusForTyping(sel) {
+  const deep = (q, root = document) => {
+    const hit = root.querySelector(q);
+    if (hit) return hit;
+    for (const e of root.querySelectorAll('*')) if (e.shadowRoot) { const h = deep(q, e.shadowRoot); if (h) return h; }
+    return null;
+  };
+  const el = deep(sel);
+  if (!el) return { found: false };
+  el.focus?.();
+  let a = document.activeElement;
+  while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement;
+  const editable = el.isContentEditable || (/^(INPUT|TEXTAREA)$/.test(el.tagName) && !el.readOnly && !el.disabled);
+  return { found: true, focused: a === el || el.contains(a), editable, active: a ? a.tagName.toLowerCase() + (a.id ? '#' + a.id : '') : null };
+}
+
 export function domAction(p) {
   // querySelector that also searches open shadow roots (refs from read_page can live inside them)
   const deepQuery = (sel, root = document) => {
