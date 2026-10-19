@@ -77,6 +77,9 @@ def _write_cell(tab_id: int, profile: str, ref: str, value: str, accept: bool):
         return {"dialog": d}
     if (now := name_box()) != _norm(ref):
         # Sheets picked another cell (a filter hides the row, or a merge): typing now would write the wrong cell
+        if not CELL_RE.match(now):
+            # The name box names a range instead of showing an address: a named range covers this cell
+            return {"aborted": f"the name box shows {now!r} instead of {ref}: a named range covers the selected cell (Data > Named ranges), so the selection can't be confirmed; nothing typed"}
         return {"aborted": f"Sheets selected {now} instead of {ref} (its row or column is hidden, by a filter or manually, or it is inside a merged cell); nothing typed"}
     # One real keystroke opens the cell's editor (replacing its content); the value itself goes in as a paste
     note = _act(tab_id, profile, action="type", selector="#waffle-rich-text-editor", text="x")

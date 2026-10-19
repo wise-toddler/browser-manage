@@ -53,6 +53,8 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
 | `browser_record` | Record screenshots of a tab's actions, export GIF | Server |
 | `browser_reload_extension` | Reload extension code from disk | Extension |
 
+Note: before #55 (2026-10-19), typing several refs into the Sheets name box could leave junk *named ranges* (e.g. `A1F25H25I25J25`) in sheets edited with `browser_action`; check Data > Named ranges there. `browser_sheets_write` only presses Enter once the name box holds exactly the requested ref.
+
 Focus-changing calls (`activate`, `open_tabs active=true`) need `allow_focus=true`.
 
 All extension-based tools accept an optional `--profile` parameter to target a specific browser profile.
