@@ -25,6 +25,12 @@ writeFileSync(page, `<!doctype html><html><head><title>Capture</title><style>
 <div id="hero"></div><div id="far"></div>
 <div id="shell"><div class="pad"></div><div id="item" data-bm-ref="7"></div><div class="pad"></div></div>
 <input id="k1" style="position:absolute;top:500px"><button id="k2" style="position:absolute;top:540px">B</button>
+<div id="ed" contenteditable style="position:absolute;top:600px;width:200px;height:30px"></div>
+<script>
+  // Like Google Sheets' cell editor: only trusted input counts, and only while the document has focus
+  window.trusted = [];
+  document.getElementById('ed').addEventListener('input', e => { if (e.isTrusted && document.hasFocus()) window.trusted.push(e.data); });
+</script>
 </body></html>`);
 
 const port = await new Promise(res => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
@@ -155,8 +161,15 @@ try {
   assert.strictEqual(await evaluate(2, 'document.activeElement.id + ":" + document.activeElement.matches(":focus-visible")'), 'k2:true');
   await doAction(2, { action: 'key', key: 'Shift+Tab', wait: 0 }, { source: 'native' });
   assert.strictEqual(await evaluate(2, 'document.activeElement.id'), 'k1');
-  // Mouse-type actions on the hidden tab still take the DOM path
-  assert.strictEqual((await doAction(2, { action: 'scroll', deltaY: 100, wait: 0 }, { source: 'native' })).mode, 'dom-fallback (tab hidden)');
+  // Mouse-type actions on the hidden tab still take the DOM path, and say their events were synthetic
+  const sc = await doAction(2, { action: 'scroll', deltaY: 100, wait: 0 }, { source: 'native' });
+  assert.strictEqual(sc.mode, 'dom-fallback (tab hidden)');
+  assert.match(sc.warning, /synthetic DOM events/);
+  // Typing on the hidden tab is real input with focus emulated: an editor that ignores synthetic events gets it
+  const ty = await doAction(2, { action: 'type', selector: '#ed', text: 'hello', wait: 0 }, { source: 'native' });
+  assert.deepStrictEqual([ty.mode, ty.warning], ['cdp (tab hidden)', undefined]);
+  assert.strictEqual(await evaluate(2, 'window.trusted.join("")'), 'hello', 'trusted, focused input reached the editor');
+  assert.strictEqual(await evaluate(2, 'document.getElementById("ed").textContent'), 'hello');
 
   // run_script: last expression, top-level await/return, a promise result is settled, timeouts fire
   fakeUrl = 'https://test.local/'; // runScript only runs on http(s) pages; the file:// page stands in for one
@@ -170,7 +183,7 @@ try {
   assert.match((await run('new Promise(() => {})', 1000)).error, /timed out after 1000ms/);
   fakeUrl = null;
 
-  console.log('capture.test OK (run_script return/await/promise/timeout, crop selector/ref/clip on visible+hidden with scroll restore, full-page tiles, viewport 390/768/1440 + mobile + reset, hidden-tab CDP keys)');
+  console.log('capture.test OK (run_script return/await/promise/timeout, hidden-tab trusted typing, crop selector/ref/clip on visible+hidden with scroll restore, full-page tiles, viewport 390/768/1440 + mobile + reset, hidden-tab CDP keys)');
   process.exit(0);
 } catch (e) {
   console.error(e);

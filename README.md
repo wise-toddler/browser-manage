@@ -94,9 +94,7 @@ Or manually in `~/.claude/settings.json`:
 Each browser profile generates a unique ID (stored in `chrome.storage.local`) and registers itself in `/tmp/tab-manager-registry.json`. The native host creates per-profile IPC files:
 
 ```
-/tmp/tab-manager-edge-3982a3d4-cmd.json      # Edge profile 1
-/tmp/tab-manager-chrome-75cec1fc-cmd.json     # Chrome profile 1
-/tmp/tab-manager-chrome-e94c1043-cmd.json     # Chrome profile 2
+/tmp/tab-manager-edge-<profile-id>.sock      # one per browser profile (file IPC fallback: ...-cmd.json)
 ```
 
 ## Memory Hog Detection
@@ -136,7 +134,7 @@ tail -f /tmp/tab-manager-host.log
 cat /tmp/tab-manager-registry.json | python3 -m json.tool
 
 # Test a specific profile
-mcp-call browser-manage browser_get_tabs_ext --profile=edge-3982a3d4
+mcp-call browser-manage browser_get_tabs_ext --profile=<id from browser_list_profiles>
 ```
 
 ## License
