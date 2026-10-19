@@ -35,7 +35,7 @@ Manage tabs across all connected Chrome and Edge profiles via the `browser-manag
 - `browser_debug` (`duration_ms` for one-shot) + `browser_read_console` (`page_only` default) / `browser_read_network` for debugging
 - `browser_batch` to chain steps, `browser_record` start → actions → export GIF
 - Never pass `allow_focus=true` unless the user asked for a visible tab
-- Google Sheets: prefer `browser_sheets_write(tab_id, cells={"F25": "value"})`: writes in a background tab and reads every cell back (ok only when all landed, misses retried once)
+- Google Sheets: prefer `browser_sheets_write(tab_id, cells={"F25": "value"})`: writes in a background tab and reads every cell back (ok only when all landed, misses retried once); any text incl. non-ASCII and line breaks inside a cell. With `browser_action`, a line break inside a cell is `key Alt+Enter`
 - Background tabs: `type`/`key` are real keystrokes (work in Google Sheets/Docs); click/scroll are synthetic and return a `warning`. Google Sheets cell write, no focus needed: `browser_action type clear=true selector='#t-name-box' text='F8\n'` then `browser_action type selector='#waffle-rich-text-editor' text='value\n'`; verify with a gviz read-back (`run_script` fetch of `/spreadsheets/d/<id>/gviz/tq?tqx=out:csv&range=F8`), never with ok:true alone
 
 ## Usage via mcp-call
