@@ -178,9 +178,20 @@ try {
   const late = await doAction(2, { action: 'type', selector: '#late2', text: 'ok', wait: 0 }, { source: 'native' });
   assert.ok(!late.error && !late.warning, JSON.stringify(late));
   assert.strictEqual(await evaluate(2, 'document.getElementById("late2").value'), 'ok');
-  await evaluate(2, 'document.activeElement.blur(), 1');
-  const lost = await doAction(2, { action: 'type', text: 'nowhere', wait: 0 }, { source: 'native' });
-  assert.match(lost.warning, /no input event reached the page/);
+  // With no editable field focused, type refuses instead of pressing keys on the page (single-key site shortcuts)
+  await evaluate(2, 'window.pageKeys = 0; document.addEventListener("keydown", () => window.pageKeys++); document.activeElement.blur(), 1');
+  const lost = await doAction(2, { action: 'type', text: 'e#', wait: 0 }, { source: 'native' });
+  assert.match(lost.error, /no editable field has focus.*Nothing was typed/);
+  assert.strictEqual(await evaluate(2, 'window.pageKeys'), 0, 'no key reached the page');
+  // Enter that drops focus (a submitted form) stops the rest from landing on the page
+  await evaluate(2, 'const f = document.createElement("input"); f.id = "f1"; f.addEventListener("keydown", e => { if (e.key === "Enter") f.blur(); }); document.body.append(f), 1');
+  const sub = await doAction(2, { action: 'type', selector: '#f1', text: 'a\nbcd', wait: 0 }, { source: 'native' });
+  assert.match(sub.error, /focus left the field after typing "a\\n"/);
+  assert.strictEqual(await evaluate(2, 'document.getElementById("f1").value'), 'a');
+  // A field that swallows keys (no input event) gets a warning, not a silent ok
+  await evaluate(2, 'const w = document.createElement("input"); w.id = "sw"; w.addEventListener("keydown", e => e.preventDefault()); document.body.append(w), 1');
+  const sw = await doAction(2, { action: 'type', selector: '#sw', text: 'zz', wait: 0 }, { source: 'native' });
+  assert.match(sw.warning, /no input event reached the page/);
   // Keystrokes carry real key codes (keydown-driven apps), clear=true replaces a field's text, Enter types "\r"
   await evaluate(2, 'window.keys = []; document.getElementById("k1").value = "old"; document.getElementById("k1").addEventListener("keydown", e => keys.push(e.code + ":" + e.keyCode)); document.getElementById("k1").addEventListener("keypress", e => keys.push("press:" + e.keyCode)); 1');
   await doAction(2, { action: 'type', selector: '#k1', text: 'B7', clear: true, wait: 0 }, { source: 'native' });

@@ -31,6 +31,10 @@ export function charKey(ch) {
 const TYPE_READY_MS = 5000;
 // Counts trusted input events reaching the page, so type can tell when its text went nowhere
 const INPUT_COUNTER = `(() => { if (!window.__bmInputs) { window.__bmInputs = { n: 0 }; addEventListener('input', e => { if (e.isTrusted) window.__bmInputs.n++; }, true); } window.__bmInputs.n = 0; return 0; })()`;
+// Whether the focused element takes text. An iframe counts: its document can't be inspected from here
+const ACTIVE_EDITABLE = `(() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  return !!a && (a.tagName === 'IFRAME' || a.isContentEditable || (/^(INPUT|TEXTAREA)$/.test(a.tagName) && !a.readOnly && !a.disabled)); })()`;
+const SHORTCUT_RISK = 'typing would press keys on the page itself, and many sites map single keys to shortcuts (Gmail: e archives, # deletes). Pass selector/ref for the field, or use key for a deliberate shortcut';
 const NO_INPUT_WARNING = 'no input event reached the page while typing: the text probably went nowhere (focus lost, or the app still loading). Read the result back; retry after waiting for the page';
 
 // Mac editing shortcuts only act when the key event names the editing command (the renderer doesn't map them)
@@ -150,6 +154,8 @@ async function cdpInput(tabId, p, cmd, hidden) {
     }
     case 'type':
       if (typeof p.text !== 'string') return { error: 'type needs text' };
+      const editable = async () => (await cmd('Runtime.evaluate', { expression: ACTIVE_EDITABLE, returnByValue: true })).result.value;
+      if (!(await editable())) return { error: `type: no editable field has focus; ${SHORTCUT_RISK}. Nothing was typed` };
       if (p.clear) {
         // Select what's in the field first so the text replaces it (Cmd/Ctrl+A, with the editing command spelled out)
         const sel = { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: IS_MAC ? 4 : 2 };
@@ -161,7 +167,8 @@ async function cdpInput(tabId, p, cmd, hidden) {
       if (hidden) await pumpFrames(cmd, 1);
       // One keystroke per character, as a real keyboard sends: editors that act on keydown (Sheets) ignore bare
       // text insertion. Characters with no key (emoji, accents) are inserted as text
-      for (const ch of p.text) {
+      const chars = [...p.text];
+      for (const [i, ch] of chars.entries()) {
         const k = ch === '\n' ? { key: 'Enter', code: 'Enter', vk: 13, shift: false, text: '\r' } : charKey(ch);
         if (!k) { await input('Input.insertText', { text: ch }, 'type'); continue; }
         const ev = { key: k.key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk, modifiers: k.shift ? 8 : 0 };
@@ -170,6 +177,10 @@ async function cdpInput(tabId, p, cmd, hidden) {
         await input('Input.dispatchKeyEvent', { type: 'keyUp', ...ev }, 'type');
         // Enter commits a line (a cell in Sheets); on a hidden tab give the app frames to finish before the next
         if (ch === '\n' && hidden) await pumpFrames(cmd, 1);
+        // Enter can submit a form and drop focus; then the rest would land on the page as shortcuts, so stop
+        if (ch === '\n' && i < chars.length - 1 && !(await editable())) {
+          return { error: `type: focus left the field after typing ${JSON.stringify(chars.slice(0, i + 1).join(''))} (Enter may have submitted a form); stopped, since ${SHORTCUT_RISK}` };
+        }
       }
       if (/[^\n]/.test(p.text)) {
         const n = (await cmd('Runtime.evaluate', { expression: 'window.__bmInputs ? window.__bmInputs.n : -1', returnByValue: true })).result.value;
