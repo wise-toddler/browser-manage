@@ -7,7 +7,7 @@ from tools import tool, schema, text, ext_error, tab_id_error
 from tools.capture import screenshot
 
 
-@tool("browser_action", "Act in a tab with real mouse/keyboard events: click (x,y, selector or ref), type text, press key, scroll, navigate, back/forward, activate. activate steals the user's window focus and needs allow_focus=true. Returns a screenshot after the action unless screenshot=false.", schema({
+@tool("browser_action", "Act in a tab with real mouse/keyboard events: click (x,y, selector or ref), type text, press key, scroll, navigate, back/forward, activate. activate steals the user's window focus and needs allow_focus=true. On a background tab type/key are real input (works in editors like Google Sheets; focus a field via type/key + selector), while click/scroll fall back to synthetic DOM events and return a `warning` (editors ignore them; read the result back). Returns a screenshot after the action (saved to /tmp, pruned after a day) unless screenshot=false.", schema({
     "tab_id": {"type": "integer"},
     "action": {"type": "string", "enum": ["click", "type", "key", "scroll", "navigate", "back", "forward", "activate"]},
     "x": {"type": "number"}, "y": {"type": "number"},

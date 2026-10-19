@@ -28,6 +28,24 @@ def _capture(tab_id: int, profile: str, payload: dict) -> dict:
     return result
 
 
+SHOT_DIR = "/tmp"
+SHOT_PREFIX = "tab-manager-shot-"
+SHOT_TTL_S = 24 * 3600
+
+
+def _prune_shots():
+    """Delete default-path screenshots older than a day (every action saves one, ~1MB each)."""
+    cutoff = time.time() - SHOT_TTL_S
+    for name in os.listdir(SHOT_DIR):
+        if name.startswith(SHOT_PREFIX):
+            try:
+                full = os.path.join(SHOT_DIR, name)
+                if os.path.getmtime(full) < cutoff:
+                    os.remove(full)
+            except OSError:
+                pass
+
+
 def _save(result: dict, path: str) -> int:
     """Write the image; return its size in KB."""
     with open(path, "wb") as f:
@@ -50,7 +68,9 @@ def screenshot(tab_id: int, profile: str, full_page: bool = False, fmt: str = "j
                at: dict = None, selector: str = None, ref=None, clip: dict = None, tile: bool = False) -> list:
     """Capture a tab via the extension; return ImageContent(s) + saved path(s), or an error TextContent."""
     ext = "jpg" if fmt == "jpeg" else "png"
-    path = path or f"/tmp/tab-manager-shot-{tab_id}-{int(time.time())}.{ext}"
+    if not path:
+        _prune_shots()
+        path = f"{SHOT_DIR}/{SHOT_PREFIX}{tab_id}-{int(time.time())}.{ext}"
     payload = {"fullPage": full_page, "format": fmt}
     if not full_page:
         payload.update({k: v for k, v in (("selector", selector), ("ref", ref), ("clip", clip)) if v is not None})

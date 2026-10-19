@@ -8,6 +8,8 @@ const KEY_CODES = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, Arr
 const INPUT_ACTIONS = ['click', 'type', 'key', 'scroll'];
 const MODIFIER_BITS = { alt: 1, option: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, command: 4, shift: 8 };
 const HIDDEN_KEY_TIMEOUT_MS = 3000;
+// DOM-fallback results say so: untrusted events fill plain forms but editors ignore them, so ok alone isn't proof
+const SYNTHETIC_WARNING = 'synthetic DOM events, not real input: plain forms take them, but editors like Google Sheets/Docs and canvas apps ignore them. Read the result back; for editors focus with type/key + selector (real input, works on hidden tabs too)';
 
 async function waitForLoad(tabId, ms = 10000) {
   const end = Date.now() + ms;
@@ -24,20 +26,46 @@ async function settled(tabId, p, extra = {}) {
 
 // With a debugger session: real CDP input on visible tabs, DOM fallback on hidden ones
 async function cdpAction(tabId, p, cmd) {
-  const mouse = (type, x, y, extra = {}) => cmd('Input.dispatchMouseEvent', { type, x, y, ...extra });
   let hidden = false;
   if (INPUT_ACTIONS.includes(p.action)) {
     const vis = (await cmd('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })).result.value;
     hidden = vis !== 'visible';
-    // Keys don't need a rendered frame: real CDP key events move focus and set :focus-visible on hidden
-    // tabs too (Tab/Shift+Tab traversal), so only mouse/type actions take the DOM path there
-    if (hidden && p.action !== 'key') {
+    // Keys and text don't need a rendered frame: real CDP key events move focus and set :focus-visible on hidden
+    // tabs too (Tab/Shift+Tab traversal), and Input.insertText reaches editors (Google Sheets) that ignore
+    // synthetic events. Only mouse actions need hit-testing on a frame, so click/scroll take the DOM path there
+    if (hidden && (p.action === 'click' || p.action === 'scroll')) {
       const mode = 'dom-fallback (tab hidden)';
       const r = (await cmd('Runtime.evaluate', { expression: `(${domAction})(${JSON.stringify(p)})`, returnByValue: true, userGesture: true })).result.value;
       if (r !== 'ok') return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
-      return settled(tabId, p, { mode });
+      return settled(tabId, p, { mode, warning: SYNTHETIC_WARNING });
     }
   }
+  // Editors check that their document has focus before taking input; a hidden tab's document doesn't.
+  // Only for this action: emulated focus also makes the page report visible, which the check above relies on
+  if (hidden) {
+    await cmd('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+    try {
+      return await cdpInput(tabId, p, cmd, hidden);
+    } finally {
+      await cmd('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => {});
+    }
+  }
+  return cdpInput(tabId, p, cmd, hidden);
+}
+
+// The real-input half of cdpAction: focus the target, then CDP mouse/keyboard/text events
+async function cdpInput(tabId, p, cmd, hidden) {
+  const mouse = (type, x, y, extra = {}) => cmd('Input.dispatchMouseEvent', { type, x, y, ...extra });
+  // A hidden tab normally answers in ms; guard anyway, and never retry: a stuck input event stays
+  // queued and fires when the tab wakes, so a retry would type it twice
+  const input = async (method, params, what) => {
+    try {
+      await cmd(method, params, hidden ? HIDDEN_KEY_TIMEOUT_MS : undefined);
+    } catch (e) {
+      if (hidden && /timed out/.test(e.message)) throw new Error(`${what} timed out on a hidden tab; not retried (it may still arrive when the tab wakes)`);
+      throw e;
+    }
+  };
   // type/key go to the focused element, so a target given by selector/ref gets focus first
   if ((p.action === 'type' || p.action === 'key') && p.selector) {
     const f = (await cmd('Runtime.evaluate', { expression: `(${domAction})(${JSON.stringify({ action: 'focus', selector: p.selector })})`, returnByValue: true })).result.value;
@@ -61,7 +89,8 @@ async function cdpAction(tabId, p, cmd) {
     }
     case 'type':
       if (typeof p.text !== 'string') return { error: 'type needs text' };
-      await cmd('Input.insertText', { text: p.text });
+      await input('Input.insertText', { text: p.text }, 'type');
+      if (hidden) return settled(tabId, p, { mode: 'cdp (tab hidden)' });
       break;
     case 'key': {
       if (!p.key) return { error: 'key needs key (e.g. Enter, Tab, Escape, ArrowDown, Shift+Tab, Meta+a)' };
@@ -71,16 +100,8 @@ async function cdpAction(tabId, p, cmd) {
       const modifiers = parts.reduce((m, x) => m | (MODIFIER_BITS[x.toLowerCase()] || 0), 0);
       const base = { key, code: key, modifiers, ...(vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {}) };
       const text = key.length === 1 && !(modifiers & (2 | 4)) ? { text: key } : {};
-      try {
-        // A hidden tab normally answers in ms; guard anyway, and never retry: a stuck input event stays
-        // queued and fires when the tab wakes, so a retry would type the key twice
-        const ms = hidden ? HIDDEN_KEY_TIMEOUT_MS : undefined;
-        await cmd('Input.dispatchKeyEvent', { type: vk ? 'rawKeyDown' : 'keyDown', ...base, ...text }, ms);
-        await cmd('Input.dispatchKeyEvent', { type: 'keyUp', ...base }, ms);
-      } catch (e) {
-        if (hidden && /timed out/.test(e.message)) throw new Error(`key ${p.key} timed out on a hidden tab; not retried (it may still arrive when the tab wakes)`);
-        throw e;
-      }
+      await input('Input.dispatchKeyEvent', { type: vk ? 'rawKeyDown' : 'keyDown', ...base, ...text }, `key ${p.key}`);
+      await input('Input.dispatchKeyEvent', { type: 'keyUp', ...base }, `key ${p.key}`);
       if (hidden) return settled(tabId, p, { mode: 'cdp (tab hidden)' });
       break;
     }
@@ -135,7 +156,7 @@ export async function doAction(tabId, p, ctx) {
   try {
     const r = await inPage(tabId, domAction, [p]);
     if (r !== 'ok') return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
-    return await settled(tabId, p, { mode });
+    return await settled(tabId, p, { mode, warning: SYNTHETIC_WARNING });
   } catch (e) {
     return { error: e.message };
   }
