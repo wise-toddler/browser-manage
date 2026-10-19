@@ -52,10 +52,12 @@ async function init() {
 // Re-fetch tabs and everything derived from them (Refresh)
 async function reloadTabs() {
   allTabs = (await send('getTabs')) || [];
+  memoryData = null; // stale after a refetch; measured again only on demand
   renderStats();
   renderStatsLoading();
   renderTabs();
   await loadExtendedData();
+  if (currentView === 'hogs') await loadMemory();
 }
 
 async function loadExtendedData() {
@@ -80,20 +82,23 @@ async function loadExtendedData() {
     // Update stale stat
     renderStaleStat();
 
-    // Fetch memory data (slow — runs after UI is ready)
-    memoryData = await send('getTabsWithMemory');
-    if (memoryData && memoryData.total_memory_gb) {
-      const gb = memoryData.total_memory_gb;
-      const memCard = $('stat-memory').closest('.stat-card');
-      $('stat-memory').textContent = gb + 'G';
-      memCard.classList.toggle('warn', gb > 2);
-      memCard.classList.toggle('danger', gb > 4);
-      // Update hog count in tab nav
-      updateTabCounts();
-    }
   } catch (e) {
     console.log('Extended data load error:', e);
   }
+}
+
+// Memory is measured only on demand (Hogs view, Memory card): it attaches the debugger to every tab, which
+// flashes the "debugging" infobar, so opening the popup shouldn't trigger it
+async function loadMemory() {
+  $('stat-memory').textContent = '...';
+  memoryData = await send('getTabsWithMemory');
+  const gb = memoryData?.total_memory_gb;
+  const memCard = $('stat-memory').closest('.stat-card');
+  $('stat-memory').textContent = gb != null ? gb + 'G' : '-';
+  memCard.classList.toggle('warn', gb > 2);
+  memCard.classList.toggle('danger', gb > 4);
+  updateTabCounts();
+  if (currentView === 'hogs') renderTabs();
 }
 
 // Tabs idle longer than STALE_THRESHOLD_HOURS, with their idle minutes
@@ -205,14 +210,15 @@ function renderStaleStat() {
   $('stat-stale').closest('.stat-card').classList.toggle('warn', staleData.length > 3);
 }
 
-// Memory and stale placeholders until loadExtendedData fills them in
+// Memory (until measured on demand) and stale (until loadExtendedData fills it in) placeholders
 function renderStatsLoading() {
-  $('stat-memory').textContent = '...';
+  $('stat-memory').textContent = '-';
   $('stat-stale').textContent = '-';
 }
 
 function updateTabCounts() {
-  const hogs = (memoryData?.tabs || []).filter(t => t.hog).length;
+  // Before memory is measured, the URL-pattern guess (same as the Hogs view shows)
+  const hogs = memoryData?.tabs ? memoryData.tabs.filter(t => t.hog).length : allTabs.filter(t => HOG_URL_PATTERNS.some(p => t.url.includes(p))).length;
   const counts = { all: allTabs.length, hogs, stale: staleData.length, disposable: disposableData.length };
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const count = counts[btn.dataset.view] || 0;
@@ -372,7 +378,10 @@ $('tabs-nav').addEventListener('click', (e) => {
   btn.classList.add('active');
   currentView = btn.dataset.view;
   renderTabs();
+  if (currentView === 'hogs') loadMemory();
 });
+
+$('stat-memory').closest('.stat-card').addEventListener('click', () => loadMemory());
 
 // Disable an action button with a busy label while fn runs
 async function withBusy(btn, busyLabel, fn) {

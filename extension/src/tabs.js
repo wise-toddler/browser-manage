@@ -46,7 +46,11 @@ export async function getTabs() {
     title: t.title,
     url: t.url,
     groupId: t.groupId,
-    groupInfo: t.groupId !== -1 ? groupMap[t.groupId] : null
+    groupInfo: t.groupId !== -1 ? groupMap[t.groupId] : null,
+    // Callers must not close or wake these by accident: the tab in front, pinned ones, and unloaded ones
+    active: t.active,
+    pinned: t.pinned,
+    discarded: t.discarded,
   }));
 }
 
@@ -77,6 +81,8 @@ export async function getTabsWithMemory() {
     if (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('chrome-extension://')) {
       return { ...tab, memory_mb: 0 };
     }
+    // A discarded tab holds no memory, and attaching the debugger would reload it
+    if (tab.discarded) return { ...tab, memory_mb: 0, hog: false, hog_reason: null };
 
     const memoryMb = await getTabMemoryViaDebugger(tab.id);
     totalMemory += memoryMb;
