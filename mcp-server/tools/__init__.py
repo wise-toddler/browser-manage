@@ -10,7 +10,7 @@ from mcp.types import Tool, TextContent
 PROFILE_PROP = {
     "profile": {
         "type": "string",
-        "description": "Target browser profile (e.g. 'edge-kgofki...'). Omit for default.",
+        "description": "Target browser profile, e.g. 'edge-54f24d93' (browser_list_profiles lists them). Required: there is no default",
     }
 }
 # List-of-tab-IDs schema shared by tab tools
