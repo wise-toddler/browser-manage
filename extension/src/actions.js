@@ -1,6 +1,6 @@
 // --- Browser actions via CDP Input events (real mouse/keyboard, works on React-style apps) ---
 import { withDebugger, inPage } from './cdp.js';
-import { domAction, selectorCenter } from './page.js';
+import { domAction, selectorCenter, focusForTyping } from './page.js';
 import { sleep, isForeignFrameError, focusBlocked } from './util.js';
 import { refSelector } from './read.js';
 
@@ -26,6 +26,12 @@ export function charKey(ch) {
   }
   return null;
 }
+
+// How long type waits for its target to exist, take focus and be editable (a slow app may still be booting)
+const TYPE_READY_MS = 5000;
+// Counts trusted input events reaching the page, so type can tell when its text went nowhere
+const INPUT_COUNTER = `(() => { if (!window.__bmInputs) { window.__bmInputs = { n: 0 }; addEventListener('input', e => { if (e.isTrusted) window.__bmInputs.n++; }, true); } window.__bmInputs.n = 0; return 0; })()`;
+const NO_INPUT_WARNING = 'no input event reached the page while typing: the text probably went nowhere (focus lost, or the app still loading). Read the result back; retry after waiting for the page';
 
 // Mac editing shortcuts only act when the key event names the editing command (the renderer doesn't map them)
 const MAC_COMMANDS = { a: 'selectAll', c: 'copy', x: 'cut', v: 'paste', z: 'undo' };
@@ -105,10 +111,26 @@ async function cdpInput(tabId, p, cmd, hidden) {
       throw e;
     }
   };
-  // type/key go to the focused element, so a target given by selector/ref gets focus first
-  if ((p.action === 'type' || p.action === 'key') && p.selector) {
+  // type/key go to the focused element, so a target given by selector/ref gets focus first. type waits (pumping
+  // frames on a hidden tab, where an app boots slowly) until the target exists, holds focus and takes text,
+  // and fails otherwise instead of typing into nothing
+  if (p.action === 'key' && p.selector) {
     const f = (await cmd('Runtime.evaluate', { expression: `(${domAction})(${JSON.stringify({ action: 'focus', selector: p.selector })})`, returnByValue: true })).result.value;
     if (f !== 'ok') return { error: notFound(p) };
+  }
+  if (p.action === 'type' && p.selector) {
+    const end = Date.now() + TYPE_READY_MS;
+    let f;
+    for (;;) {
+      f = (await cmd('Runtime.evaluate', { expression: `(${focusForTyping})(${JSON.stringify(p.selector)})`, returnByValue: true })).result.value;
+      if (f.found && f.focused && f.editable) break;
+      if (Date.now() > end) {
+        if (!f.found) return { error: notFound(p) };
+        return { error: `type: ${p.selector} ${!f.editable ? "isn't an editable field" : `didn't take focus (focus is on ${f.active})`} after ${TYPE_READY_MS / 1000}s; the page may still be loading. Nothing was typed` };
+      }
+      if (hidden) await pumpFrames(cmd, 1);
+      await sleep(200);
+    }
   }
   let { x, y } = p;
   if (p.selector && p.action !== 'type' && p.action !== 'key') {
@@ -134,6 +156,9 @@ async function cdpInput(tabId, p, cmd, hidden) {
         await input('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...sel, commands: ['selectAll'] }, 'type');
         await input('Input.dispatchKeyEvent', { type: 'keyUp', ...sel }, 'type');
       }
+      await cmd('Runtime.evaluate', { expression: INPUT_COUNTER, returnByValue: true });
+      // Let a hidden app run what it queued for the next frame before the first keystroke
+      if (hidden) await pumpFrames(cmd, 1);
       // One keystroke per character, as a real keyboard sends: editors that act on keydown (Sheets) ignore bare
       // text insertion. Characters with no key (emoji, accents) are inserted as text
       for (const ch of p.text) {
@@ -143,6 +168,12 @@ async function cdpInput(tabId, p, cmd, hidden) {
         const text = k.text ?? ch;
         await input('Input.dispatchKeyEvent', { type: 'keyDown', ...ev, text, unmodifiedText: text }, 'type');
         await input('Input.dispatchKeyEvent', { type: 'keyUp', ...ev }, 'type');
+        // Enter commits a line (a cell in Sheets); on a hidden tab give the app frames to finish before the next
+        if (ch === '\n' && hidden) await pumpFrames(cmd, 1);
+      }
+      if (/[^\n]/.test(p.text)) {
+        const n = (await cmd('Runtime.evaluate', { expression: 'window.__bmInputs ? window.__bmInputs.n : -1', returnByValue: true })).result.value;
+        if (n === 0) return settled(tabId, p, { ...(hidden ? { mode: 'cdp (tab hidden)' } : {}), warning: NO_INPUT_WARNING });
       }
       if (hidden) return settled(tabId, p, { mode: 'cdp (tab hidden)' });
       break;

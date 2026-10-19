@@ -40,6 +40,7 @@ Control browser tabs across Chrome and Edge profiles from terminal/CLI via MCP.
 | `browser_action` | click/type/key/scroll/navigate/back/forward by ref, selector or x,y (keys like `Shift+Tab` use real CDP input even on hidden tabs) | Extension |
 | `browser_wait_for` | Wait for selector/ref/text/URL (or gone) | Extension |
 | `browser_upload` | Set files on `<input type=file>` | Extension |
+| `browser_sheets_write` | Write Google Sheets cells in a background tab, verified by read-back (ok only if every cell landed) | Server |
 | `browser_run_script` | JS in page context, logged: last expression, top-level `await`/`return`, promise results awaited, `timeout_ms` (8s default, 60s max), wakes sleeping tabs | Extension |
 | `browser_screenshot` | Viewport, element crop (`selector`/`ref`), `clip` box, or full page in 8000px tiles; hidden tabs too | Extension |
 | `browser_set_viewport` | Emulate width/height/dpr/mobile (stays until `reset=true`) | Extension |

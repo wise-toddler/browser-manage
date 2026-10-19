@@ -34,7 +34,9 @@ def fake_result(action, payload):
     return {
         "echo": payload,
         "big": "x" * 3_000_000,
-        "getTabs": [{"id": 1, "url": "https://example.com/", "title": "Example", "groupId": 7, "groupInfo": {"title": "G", "color": "blue"}}],
+        "getTabs": [{"id": 1, "url": "https://example.com/", "title": "Example", "groupId": 7, "groupInfo": {"title": "G", "color": "blue"}},
+                    {"id": 2, "url": "https://docs.google.com/spreadsheets/d/abc123/edit#gid=0", "title": "Sheet", "groupId": -1}],
+        "runScript": {"result": {"B2": '"hi"'}, "type": "object"},
         "getDecisionLog": {"data": []},
         "getDomainStats": {"data": {}},
         "getTabTracking": {"data": {}},
@@ -142,7 +144,7 @@ def main():
     print("PASS file-IPC fallback (no sock, and sock path missing)")
 
     names = [t.name for t in asyncio.run(server.list_tools())]
-    assert len(names) == 32, len(names)  # 20 from P0 + 5 page (P1) + 5 debug/batch/record (P2) + set_viewport + close_group (feedback)
+    assert len(names) == 33, len(names)  # 20 from P0 + 5 page (P1) + 5 debug/batch/record (P2) + set_viewport + close_group (feedback) + sheets_write
     shot = os.path.join(TMP, "shot.jpg")
     args = {
         "browser_create_group": {"name": "G", "tab_ids": [1]},
@@ -155,6 +157,7 @@ def main():
         "browser_read_page": {"tab_id": 1}, "browser_find": {"tab_id": 1, "query": "more"}, "browser_get_page_text": {"tab_id": 1},
         "browser_wait_for": {"tab_id": 1, "selector": "a", "timeout_ms": 1000}, "browser_upload": {"tab_id": 1, "selector": "input", "paths": [__file__]},
         "browser_set_viewport": {"tab_id": 1, "width": 390, "height": 844}, "browser_close_group": {"name": "G"},
+        "browser_sheets_write": {"tab_id": 2, "cells": {"B2": "hi"}},
     }
     for n in names:
         out = asyncio.run(server.call_tool(n, {"profile": PROFILE, **args.get(n, {})}))
