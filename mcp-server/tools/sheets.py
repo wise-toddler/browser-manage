@@ -38,6 +38,18 @@ def _dialog(tab_id: int, profile: str, accept_warning: bool):
     return r.get("result") if isinstance(r, dict) and isinstance(r.get("result"), dict) else None
 
 
+# Put a value into the open cell editor as one paste: any characters (an em dash has no key; keystroke typing
+# fell back to insertText, which doesn't open Sheets' editor) and line breaks inside the cell. Returns what
+# the editor then holds, so it can be checked before Enter commits it
+PASTE_JS = """const ed = document.querySelector('#waffle-rich-text-editor');
+ed.focus();
+document.execCommand('selectAll');
+const dt = new DataTransfer();
+dt.setData('text/plain', %s);
+ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+return ed.innerText;"""
+
+
 def _js(tab_id: int, profile: str, code: str):
     """Run a small read-only snippet in the tab; its result, else None."""
     r = send_extension_command("runScript", {"tabId": tab_id, "code": code}, timeout=30, profile=profile)
@@ -53,6 +65,8 @@ def _write_cell(tab_id: int, profile: str, ref: str, value: str, accept: bool):
     """Select ref via the name box, verified before and after Enter, then type value; why it stopped (dict), else None."""
     def name_box():
         return _norm(_js(tab_id, profile, "return document.querySelector('#t-name-box').value"))
+    # Cancel any cell edit left open (it would carry its text into the next cell)
+    _act(tab_id, profile, action="key", key="Escape")
     _act(tab_id, profile, action="type", selector="#t-name-box", clear=True, text=ref)
     if name_box() != _norm(ref):
         # The keys went somewhere else (an open cell editor took them): cancel that edit, write nothing
@@ -64,7 +78,14 @@ def _write_cell(tab_id: int, profile: str, ref: str, value: str, accept: bool):
     if (now := name_box()) != _norm(ref):
         # Sheets picked another cell (a filter hides the row, or a merge): typing now would write the wrong cell
         return {"aborted": f"Sheets selected {now} instead of {ref} (its row or column is hidden, by a filter or manually, or it is inside a merged cell); nothing typed"}
-    note = _act(tab_id, profile, action="type", selector="#waffle-rich-text-editor", text=f"{value}\n")
+    # One real keystroke opens the cell's editor (replacing its content); the value itself goes in as a paste
+    note = _act(tab_id, profile, action="type", selector="#waffle-rich-text-editor", text="x")
+    held = _js(tab_id, profile, PASTE_JS % json.dumps(value))
+    if not isinstance(held, str) or held.rstrip("\n") != value:
+        # The editor doesn't hold exactly the value: cancel the edit so the cell keeps what it had
+        _act(tab_id, profile, action="key", key="Escape")
+        return {"aborted": f"the cell editor held {held!r} instead of the value; edit cancelled, cell unchanged"}
+    _act(tab_id, profile, action="key", key="Enter")
     if (d := _dialog(tab_id, profile, accept)):
         return None if d.get("accepted") else {"dialog": d}
     return {"note": note} if note else None
@@ -106,7 +127,7 @@ def _landed(expected: str, got: str) -> bool:
 
 @tool("browser_sheets_write", "Write values into Google Sheets cells of the sheet open in a tab (a background tab works; no focus change), then read every cell back via gviz and report per cell whether it landed. Cells that didn't land are retried once. ok is true only when every read-back matches. Values starting with = are formulas (landed = a non-error result); start a value with ' to store it as literal text. A Sheets dialog (protected range, rejected input) is reported per cell as `dialog` and closed; warning-only protection is accepted only with accept_protection_warning=true.", schema({
     "tab_id": {"type": "integer"},
-    "cells": {"type": "object", "description": "Cell ref -> value on the sheet tab currently shown, e.g. {\"F25\": \"Asked infra\", \"H25\": \"done\"}; one line per value", "additionalProperties": {"type": "string"}},
+    "cells": {"type": "object", "description": "Cell ref -> value on the sheet tab currently shown, e.g. {\"F25\": \"Asked infra\", \"H25\": \"done\"}; any text: line breaks stay inside the cell", "additionalProperties": {"type": "string"}},
     "accept_protection_warning": {"type": "boolean", "description": "Click OK on Sheets' 'edit anyway?' warning for a warning-only protected range (the owner set it on purpose; only when the user asked)", "default": False},
 }, ["tab_id", "cells"]))
 async def browser_sheets_write(args):
@@ -115,9 +136,9 @@ async def browser_sheets_write(args):
     tab_id, profile, cells = args["tab_id"], args.get("profile"), args.get("cells") or {}
     if not isinstance(cells, dict) or not cells:
         return [text("Error: cells must be a non-empty object of cell ref -> value")]
-    bad = [k for k, v in cells.items() if not CELL_RE.match(str(k)) or not isinstance(v, str) or "\n" in v]
+    bad = [k for k, v in cells.items() if not CELL_RE.match(str(k)) or not isinstance(v, str)]
     if bad:
-        return [text(f"Error: bad cells {bad}: refs like F25, values single-line strings")]
+        return [text(f"Error: bad cells {bad}: refs like F25, values strings")]
     tabs = send_extension_command("getTabs", {}, profile=profile)
     if (err := ext_error(tabs, list)):
         return [text(err)]
