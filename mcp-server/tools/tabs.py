@@ -6,6 +6,11 @@ from ipc import send_extension_command
 from tools import tool, schema, dispatch, text, as_json, ext_result, ext_error, TAB_IDS
 
 
+def _close_timeout(n: int) -> float:
+    """IPC wait for closing n tabs: Edge resolves one tabs.remove only after every tab is gone (50 took >10s)."""
+    return min(10 + 0.5 * n, 120)
+
+
 @tool("browser_create_group", "Create a tab group with specified tabs via extension.", schema({
     "name": {"type": "string", "description": "Name for the tab group"},
     "color": {"type": "string", "description": "Color: grey, blue, red, yellow, green, pink, purple, cyan, orange", "default": "blue"},
@@ -61,7 +66,7 @@ async def close_group(args):
     if not ids:
         titles = sorted({(t.get("groupInfo") or {}).get("title") or "(untitled)" for t in tabs if t.get("groupInfo")})
         return [text(f"Error: no tab group titled {name!r}. Groups: {titles}")]
-    result = send_extension_command("closeTabs", {"tabIds": ids}, profile=profile)
+    result = send_extension_command("closeTabs", {"tabIds": ids}, timeout=_close_timeout(len(ids)), profile=profile)
     if (err := ext_error(result)):
         return [text(err)]
     return [text(f"Closed {len(ids)} tabs in group {name!r}")]
@@ -85,7 +90,7 @@ async def close_duplicates(args):
             to_close.extend([t['id'] for t in tab_list[1:]])
     if not to_close:
         return [text("No duplicate tabs found")]
-    result = send_extension_command("closeTabs", {"tabIds": to_close}, profile=profile)
+    result = send_extension_command("closeTabs", {"tabIds": to_close}, timeout=_close_timeout(len(to_close)), profile=profile)
     if (err := ext_error(result)):
         return [text(err)]
     return [text(f"Closed {len(to_close)} duplicate tabs")]
@@ -118,7 +123,7 @@ async def close_by_ids(args):
     tab_ids = args.get("tab_ids", [])
     if not tab_ids:
         return [text("No tab IDs provided")]
-    result = send_extension_command("closeTabs", {"tabIds": tab_ids}, profile=args.get("profile"))
+    result = send_extension_command("closeTabs", {"tabIds": tab_ids}, timeout=_close_timeout(len(tab_ids)), profile=args.get("profile"))
     if (err := ext_error(result)):
         return [text(err)]
     return [text(f"Closed {len(tab_ids)} tabs")]
