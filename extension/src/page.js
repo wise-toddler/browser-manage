@@ -108,7 +108,13 @@ export function selectorCenter(sel) {
   if (!e) return null;
   e.scrollIntoView({block:'center'});
   const r = e.getBoundingClientRect();
-  return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+  const x = r.x + r.width / 2, y = r.y + r.height / 2;
+  // What a real click at that point would hit (through open shadow roots): the caller refuses to click when it's
+  // something else covering the target, or nothing because the target is off-screen
+  let top = document.elementFromPoint(x, y);
+  while (top && top.shadowRoot) { const inner = top.shadowRoot.elementFromPoint(x, y); if (!inner || inner === top) break; top = inner; }
+  const name = n => n.tagName.toLowerCase() + (n.getAttribute('data-testid') ? `[data-testid="${n.getAttribute('data-testid')}"]` : '') + ((n.innerText || '').trim() ? ` "${n.innerText.trim().slice(0, 30)}"` : '');
+  return {x, y, onTop: !!top && (top === e || e.contains(top)), top: top ? name(top) : 'nothing (off-screen)'};
 }
 
 // Remember every non-zero scroll position, and put them back
