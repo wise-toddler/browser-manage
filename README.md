@@ -136,8 +136,9 @@ tail -f /tmp/tab-manager-host.log
 # Check active profiles
 cat /tmp/tab-manager-registry.json | python3 -m json.tool
 
-# Test a specific profile
-mcp-call browser-manage browser_get_tabs_ext --profile=<id from browser_list_profiles>
+# Test a specific profile (tool output is already JSON: pipe it straight to jq / python3 -m json.tool;
+# mcp-call's -o flag is only for --servers / --tools / --search)
+mcp-call browser-manage browser_get_tabs_ext --profile=<id from browser_list_profiles> | python3 -m json.tool
 ```
 
 ## License

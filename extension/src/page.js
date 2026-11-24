@@ -5,13 +5,25 @@
 // background tabs never produce) and tabs where the debugger is refused
 // type's target: focus it and report whether it really holds focus and takes text (self-contained: runs in the page)
 export function focusForTyping(sel) {
-  const deep = (q, root = document) => {
-    const hit = root.querySelector(q);
-    if (hit) return hit;
-    for (const e of root.querySelectorAll('*')) if (e.shadowRoot) { const h = deep(q, e.shadowRoot); if (h) return h; }
-    return null;
+  // Every match (open shadow roots included). With several, the one a user would hit: visible, on top at its
+  // centre (a modal over the page), inside an open dialog; the hidden inline copy of a widget loses
+  const deepAll = (q, root = document, out = []) => {
+    out.push(...root.querySelectorAll(q));
+    for (const x of root.querySelectorAll('*')) if (x.shadowRoot) deepAll(q, x.shadowRoot, out);
+    return out;
   };
-  const el = deep(sel);
+  const pick = q => {
+    const all = deepAll(q);
+    if (all.length < 2) return all[0] || null;
+    const score = x => {
+      const r = x.getBoundingClientRect();
+      if (!r.width || !r.height || getComputedStyle(x).visibility === 'hidden') return 0;
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return 1 + (top && (top === x || x.contains(top)) ? 2 : 0) + (x.closest('[role=dialog],[aria-modal=true]') ? 1 : 0);
+    };
+    return all.map(x => [score(x), x]).sort((a, b) => b[0] - a[0])[0][1];
+  };
+  const el = pick(sel);
   if (!el) return { found: false };
   el.focus?.();
   let a = document.activeElement;
@@ -21,15 +33,26 @@ export function focusForTyping(sel) {
 }
 
 export function domAction(p) {
-  // querySelector that also searches open shadow roots (refs from read_page can live inside them)
-  const deepQuery = (sel, root = document) => {
-    const hit = root.querySelector(sel);
-    if (hit) return hit;
-    for (const e of root.querySelectorAll('*')) if (e.shadowRoot) { const h = deepQuery(sel, e.shadowRoot); if (h) return h; }
-    return null;
+  // Every match (open shadow roots included). With several, the one a user would hit: visible, on top at its
+  // centre (a modal over the page), inside an open dialog; the hidden inline copy of a widget loses
+  const deepAll = (q, root = document, out = []) => {
+    out.push(...root.querySelectorAll(q));
+    for (const x of root.querySelectorAll('*')) if (x.shadowRoot) deepAll(q, x.shadowRoot, out);
+    return out;
+  };
+  const pick = q => {
+    const all = deepAll(q);
+    if (all.length < 2) return all[0] || null;
+    const score = x => {
+      const r = x.getBoundingClientRect();
+      if (!r.width || !r.height || getComputedStyle(x).visibility === 'hidden') return 0;
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return 1 + (top && (top === x || x.contains(top)) ? 2 : 0) + (x.closest('[role=dialog],[aria-modal=true]') ? 1 : 0);
+    };
+    return all.map(x => [score(x), x]).sort((a, b) => b[0] - a[0])[0][1];
   };
   const dx = p.deltaX || 0, dy = p.deltaY ?? 600;
-  const el = p.selector ? deepQuery(p.selector) : (p.x != null ? document.elementFromPoint(p.x, p.y) : document.activeElement);
+  const el = p.selector ? pick(p.selector) : (p.x != null ? document.elementFromPoint(p.x, p.y) : document.activeElement);
   if (p.action === 'scroll') {
     if (p.selector && el) { el.scrollBy(dx, dy); return 'ok'; }
     const se = document.scrollingElement, before = se.scrollTop;
@@ -45,7 +68,12 @@ export function domAction(p) {
   }
   if (!el) return 'no element';
   if (p.action === 'focus') { el.focus?.(); return 'ok'; }
-  if (p.action === 'click') { el.scrollIntoView({block:'center'}); el.focus?.(); el.click(); if (p.double) el.dispatchEvent(new MouseEvent('dblclick', {bubbles:true})); return 'ok'; }
+  if (p.action === 'click') {
+    el.scrollIntoView({block:'center'}); el.focus?.(); el.click(); if (p.double) el.dispatchEvent(new MouseEvent('dblclick', {bubbles:true}));
+    // Which element took the click, so a caller can tell when a selector matched something else
+    const tid = el.getAttribute('data-testid');
+    return { ok: true, hit: el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (tid ? `[data-testid="${tid}"]` : '') + (el.closest('[role=dialog],[aria-modal=true]') ? ' (in dialog)' : '') };
+  }
   if (p.action === 'type') { el.focus?.(); return document.execCommand('insertText', false, p.text) ? 'ok' : 'insertText failed'; }
   if (p.action === 'key') {
     const o = { key: p.key, code: p.key, bubbles: true, cancelable: true };
@@ -58,13 +86,25 @@ export function domAction(p) {
 
 // Center of the element matching sel (open shadow roots included) after scrolling it into view, or null if absent
 export function selectorCenter(sel) {
-  const deepQuery = (s, root = document) => {
-    const hit = root.querySelector(s);
-    if (hit) return hit;
-    for (const x of root.querySelectorAll('*')) if (x.shadowRoot) { const h = deepQuery(s, x.shadowRoot); if (h) return h; }
-    return null;
+  // Every match (open shadow roots included). With several, the one a user would hit: visible, on top at its
+  // centre (a modal over the page), inside an open dialog; the hidden inline copy of a widget loses
+  const deepAll = (q, root = document, out = []) => {
+    out.push(...root.querySelectorAll(q));
+    for (const x of root.querySelectorAll('*')) if (x.shadowRoot) deepAll(q, x.shadowRoot, out);
+    return out;
   };
-  const e = deepQuery(sel);
+  const pick = q => {
+    const all = deepAll(q);
+    if (all.length < 2) return all[0] || null;
+    const score = x => {
+      const r = x.getBoundingClientRect();
+      if (!r.width || !r.height || getComputedStyle(x).visibility === 'hidden') return 0;
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return 1 + (top && (top === x || x.contains(top)) ? 2 : 0) + (x.closest('[role=dialog],[aria-modal=true]') ? 1 : 0);
+    };
+    return all.map(x => [score(x), x]).sort((a, b) => b[0] - a[0])[0][1];
+  };
+  const e = pick(sel);
   if (!e) return null;
   e.scrollIntoView({block:'center'});
   const r = e.getBoundingClientRect();

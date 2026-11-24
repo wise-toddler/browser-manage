@@ -1,5 +1,5 @@
 // --- Browser actions via CDP Input events (real mouse/keyboard, works on React-style apps) ---
-import { withDebugger, inPage } from './cdp.js';
+import { withDebugger, inPage, getDialog } from './cdp.js';
 import { domAction, selectorCenter, focusForTyping } from './page.js';
 import { sleep, isForeignFrameError, focusBlocked } from './util.js';
 import { refSelector } from './read.js';
@@ -34,13 +34,23 @@ const INPUT_COUNTER = `(() => { if (!window.__bmInputs) { window.__bmInputs = { 
 // Whether the focused element takes text. An iframe counts: its document can't be inspected from here
 const ACTIVE_EDITABLE = `(() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
   return !!a && (a.tagName === 'IFRAME' || a.isContentEditable || (/^(INPUT|TEXTAREA)$/.test(a.tagName) && !a.readOnly && !a.disabled)); })()`;
+// Marks the editor that typing starts in; IN_EDITOR: focus is inside it, or on any other editable field
+const MARK_EDITOR = `(() => { document.querySelectorAll('[data-bm-typing]').forEach(e => e.removeAttribute('data-bm-typing'));
+  let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  if (!a) return false; let root = a; for (let e = a; e; e = e.parentElement) if (e.isContentEditable) root = e;
+  root.setAttribute('data-bm-typing', '1'); return true; })()`;
+const IN_EDITOR = `(() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  const root = document.querySelector('[data-bm-typing]');
+  if (root && a && (root === a || root.contains(a))) return true;
+  return !!a && (a.tagName === 'IFRAME' || a.isContentEditable || (/^(INPUT|TEXTAREA)$/.test(a.tagName) && !a.readOnly && !a.disabled)); })()`;
 const SHORTCUT_RISK = 'typing would press keys on the page itself, and many sites map single keys to shortcuts (Gmail: e archives, # deletes). Pass selector/ref for the field, or use key for a deliberate shortcut';
 const NO_INPUT_WARNING = 'no input event reached the page while typing: the text probably went nowhere (focus lost, or the app still loading). Read the result back; retry after waiting for the page';
 
 // Mac editing shortcuts only act when the key event names the editing command (the renderer doesn't map them)
 const MAC_COMMANDS = { a: 'selectAll', c: 'copy', x: 'cut', v: 'paste', z: 'undo' };
 const IS_MAC = /Mac/.test(navigator.userAgent);
-// Tabs whose debugger session has focus emulation on (see cdpAction); the session ending resets it
+// Tabs whose debugger session has focus emulation on (see cdpAction); the session ending resets it. Only saves
+// re-sending it: a worker restart forgets this set, and turning emulation on again is harmless
 const focusEmulated = new Set();
 chrome.debugger.onDetach.addListener(({ tabId }) => focusEmulated.delete(tabId));
 
@@ -72,23 +82,22 @@ async function settled(tabId, p, extra = {}) {
 async function cdpAction(tabId, p, cmd) {
   let hidden = false;
   if (INPUT_ACTIONS.includes(p.action)) {
-    if (focusEmulated.has(tabId)) {
-      // Emulated focus makes the page report visible, so ask the browser: only the active tab of the focused
-      // window is surely painting (an active tab in a window behind other apps is occluded, i.e. hidden)
-      const t = await chrome.tabs.get(tabId);
-      hidden = !t.active || !(await chrome.windows.get(t.windowId)).focused;
-    } else {
-      const vis = (await cmd('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })).result.value;
-      hidden = vis !== 'visible';
-    }
+    // The page's own answer can't be trusted alone: emulated focus makes it report visible, and that emulation can
+    // outlive this worker's memory of turning it on. Only the active tab of the focused window is surely painting
+    // (an active tab in a window behind other apps is occluded, i.e. hidden)
+    const t = await chrome.tabs.get(tabId);
+    const vis = (await cmd('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true })).result.value;
+    hidden = vis !== 'visible' || !t.active || !(await chrome.windows.get(t.windowId)).focused;
     // Keys and text don't need a rendered frame: real CDP key events move focus and set :focus-visible on hidden
     // tabs too (Tab/Shift+Tab traversal), and Input.insertText reaches editors (Google Sheets) that ignore
     // synthetic events. Only mouse actions need hit-testing on a frame, so click/scroll take the DOM path there
-    if (hidden && (p.action === 'click' || p.action === 'scroll')) {
+    // real=true asks for real CDP mouse input on a hidden tab anyway (some controls ignore synthetic clicks); it's
+    // guarded like hidden keys and gets frames pumped around it
+    if (hidden && (p.action === 'scroll' || (p.action === 'click' && !p.real))) {
       const mode = 'dom-fallback (tab hidden)';
       const r = (await cmd('Runtime.evaluate', { expression: `(${domAction})(${JSON.stringify(p)})`, returnByValue: true, userGesture: true })).result.value;
-      if (r !== 'ok') return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
-      return settled(tabId, p, { mode, warning: SYNTHETIC_WARNING });
+      if (r !== 'ok' && !r?.ok) return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
+      return settled(tabId, p, { mode, ...(r?.hit ? { hit: r.hit } : {}), warning: SYNTHETIC_WARNING });
     }
   }
   // Editors check that their document has focus before taking input; a hidden tab's document doesn't. It stays
@@ -146,6 +155,15 @@ async function cdpInput(tabId, p, cmd, hidden) {
     case 'click': {
       if (x == null || y == null) return { error: 'click needs x,y, selector or ref' };
       const button = p.button || 'left', clickCount = p.double ? 2 : 1;
+      if (hidden) {
+        // real=true on a hidden tab: hit-testing needs a frame, so pump one around each event (guarded, no retry)
+        for (const [type, extra] of [['mouseMoved', {}], ['mousePressed', { button, clickCount }], ['mouseReleased', { button, clickCount }]]) {
+          await pumpFrames(cmd, 1);
+          await input('Input.dispatchMouseEvent', { type, x, y, ...extra }, `click ${type}`);
+        }
+        await pumpFrames(cmd, 1);
+        return settled(tabId, p, { mode: 'cdp mouse (tab hidden, real)', at: { x: Math.round(x), y: Math.round(y) } });
+      }
       await mouse('mouseMoved', x, y);
       await mouse('mousePressed', x, y, { button, clickCount });
       await mouse('mouseReleased', x, y, { button, clickCount });
@@ -156,6 +174,17 @@ async function cdpInput(tabId, p, cmd, hidden) {
       if (typeof p.text !== 'string') return { error: 'type needs text' };
       const editable = async () => (await cmd('Runtime.evaluate', { expression: ACTIVE_EDITABLE, returnByValue: true })).result.value;
       if (!(await editable())) return { error: `type: no editable field has focus; ${SHORTCUT_RISK}. Nothing was typed` };
+      // The editor typing starts in (outermost contenteditable around the focus, else the field): rich editors
+      // (X's Draft.js) re-render on Enter, so focus inside it again counts as still in the field
+      await cmd('Runtime.evaluate', { expression: MARK_EDITOR, returnByValue: true });
+      const stillInField = async () => {
+        for (let i = 0; i < 6; i++) {
+          if ((await cmd('Runtime.evaluate', { expression: IN_EDITOR, returnByValue: true })).result.value) return true;
+          if (hidden) await pumpFrames(cmd, 1);
+          await sleep(100);
+        }
+        return false;
+      };
       if (p.clear) {
         // Select what's in the field first so the text replaces it (Cmd/Ctrl+A, with the editing command spelled out)
         const sel = { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: IS_MAC ? 4 : 2 };
@@ -178,10 +207,11 @@ async function cdpInput(tabId, p, cmd, hidden) {
         // Enter commits a line (a cell in Sheets); on a hidden tab give the app frames to finish before the next
         if (ch === '\n' && hidden) await pumpFrames(cmd, 1);
         // Enter can submit a form and drop focus; then the rest would land on the page as shortcuts, so stop
-        if (ch === '\n' && i < chars.length - 1 && !(await editable())) {
+        if (ch === '\n' && i < chars.length - 1 && !(await stillInField())) {
           return { error: `type: focus left the field after typing ${JSON.stringify(chars.slice(0, i + 1).join(''))} (Enter may have submitted a form); stopped, since ${SHORTCUT_RISK}` };
         }
       }
+      await cmd('Runtime.evaluate', { expression: "document.querySelectorAll('[data-bm-typing]').forEach(e => e.removeAttribute('data-bm-typing'))" });
       if (/[^\n]/.test(p.text)) {
         const n = (await cmd('Runtime.evaluate', { expression: 'window.__bmInputs ? window.__bmInputs.n : -1', returnByValue: true })).result.value;
         if (n === 0) return settled(tabId, p, { ...(hidden ? { mode: 'cdp (tab hidden)' } : {}), warning: NO_INPUT_WARNING });
@@ -213,6 +243,44 @@ async function cdpInput(tabId, p, cmd, hidden) {
   return settled(tabId, p);
 }
 
+// Reload through CDP. A beforeunload "Reload site?" prompt is accepted, the one this reload raises and one left
+// open by an earlier location.reload(): the caller asked for the reload. Other dialogs are left to action=dialog
+async function reloadTab(tabId, p) {
+  let accepted = false;
+  const onEvent = ({ tabId: t }, method, params) => {
+    if (t === tabId && method === 'Page.javascriptDialogOpening' && params.type === 'beforeunload') {
+      accepted = true;
+      chrome.debugger.sendCommand({ tabId }, 'Page.handleJavaScriptDialog', { accept: true }).catch(() => {});
+    }
+  };
+  chrome.debugger.onEvent.addListener(onEvent);
+  try {
+    const r = await withDebugger(tabId, async cmd => {
+      const open = getDialog(tabId);
+      if (open && open.type !== 'beforeunload') return { error: `the page is showing a ${open.type} dialog; close it with action=dialog first` };
+      if (open) { accepted = true; await cmd('Page.handleJavaScriptDialog', { accept: true }); return {}; }
+      await cmd('Page.enable');
+      await cmd('Page.reload', { ignoreCache: !!p.hard });
+      return {};
+    }, { allowDialog: true });
+    if (r.error) return r;
+    await sleep(300); await waitForLoad(tabId);
+    return { ok: true, url: (await chrome.tabs.get(tabId)).url, ...(accepted ? { acceptedBeforeunload: true } : {}) };
+  } finally {
+    chrome.debugger.onEvent.removeListener(onEvent);
+  }
+}
+
+// Close the JS dialog open in the tab (accept=false cancels; text answers a prompt)
+async function handleDialog(tabId, p) {
+  return withDebugger(tabId, async cmd => {
+    const d = getDialog(tabId);
+    if (!d) return { error: 'no dialog is open in this tab (or it opened before browser-manage attached to it)' };
+    await cmd('Page.handleJavaScriptDialog', { accept: p.accept !== false, ...(p.text != null ? { promptText: String(p.text) } : {}) });
+    return { ok: true, dialog: d, accepted: p.accept !== false };
+  }, { allowDialog: true });
+}
+
 const notFound = p => (p.ref != null ? `ref ${p.ref} not found (page changed? read the page again)` : `selector not found: ${p.selector}`);
 
 export async function doAction(tabId, p, ctx) {
@@ -236,6 +304,8 @@ export async function doAction(tabId, p, ctx) {
       await sleep(300); await waitForLoad(tabId);
       return { ok: true, url: (await chrome.tabs.get(tabId)).url };
     }
+    if (p.action === 'reload') return await reloadTab(tabId, p);
+    if (p.action === 'dialog') return await handleDialog(tabId, p);
     if (p.action === 'back' || p.action === 'forward') {
       await (p.action === 'back' ? chrome.tabs.goBack(tabId) : chrome.tabs.goForward(tabId));
       await sleep(300); await waitForLoad(tabId);
@@ -254,8 +324,8 @@ export async function doAction(tabId, p, ctx) {
   const mode = "dom-fallback (debugger blocked by another extension's frame)";
   try {
     const r = await inPage(tabId, domAction, [p]);
-    if (r !== 'ok') return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
-    return await settled(tabId, p, { mode, warning: SYNTHETIC_WARNING });
+    if (r !== 'ok' && !r?.ok) return { error: r === 'no element' && p.selector ? notFound(p) : `${p.action} (${mode}): ${r}` };
+    return await settled(tabId, p, { mode, ...(r?.hit ? { hit: r.hit } : {}), warning: SYNTHETIC_WARNING });
   } catch (e) {
     return { error: e.message };
   }

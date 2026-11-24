@@ -90,7 +90,7 @@ try {
       onDetach: { addListener: fn => detachListeners.push(fn) },
     },
     tabs: { get: async id => ({ id, windowId: 1, active: true, status: 'complete', url: await evaluate('location.href') }) },
-    windows: { get: async id => ({ id, state: 'normal' }) },
+    windows: { get: async id => ({ id, state: 'normal', focused: true }) },
   };
   const { readPage, findInPage, getPageText, waitFor, uploadFiles } = await import('./src/read.js');
   const { doAction } = await import('./src/actions.js');
@@ -152,7 +152,7 @@ try {
   assert(r.ok, JSON.stringify(r)); assert.strictEqual(await evaluate("document.getElementById('email').value"), 'a@b.co');
   assert.match((await doAction(TAB, { action: 'click', ref: 424242, wait: 0 }, native)).error, /ref 424242 not found/);
   // DOM fallback (hidden tabs / blocked debugger) resolves refs inside shadow roots too
-  assert.strictEqual(await evaluate(`(${domAction})(${JSON.stringify({ action: 'click', selector: `[data-bm-ref="${shadowRef}"]` })})`), 'ok');
+  assert.deepStrictEqual(await evaluate(`(${domAction})(${JSON.stringify({ action: 'click', selector: `[data-bm-ref="${shadowRef}"]` })})`), { ok: true, hit: 'button#s' });
   assert.strictEqual(await evaluate('window.shadowClicks'), 2);
   r = await (async () => { block(true); try { return await doAction(TAB, { action: 'click', ref: loginRef, wait: 0 }, native); } finally { block(false); } })();
   assert(r.ok && /debugger blocked/.test(r.mode), JSON.stringify(r)); assert.strictEqual(await evaluate('window.clicks'), 2);

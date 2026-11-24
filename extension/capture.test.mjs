@@ -26,7 +26,17 @@ writeFileSync(page, `<!doctype html><html><head><title>Capture</title><style>
 <div id="shell"><div class="pad"></div><div id="item" data-bm-ref="7"></div><div class="pad"></div></div>
 <input id="k1" style="position:absolute;top:500px"><button id="k2" style="position:absolute;top:540px">B</button>
 <div id="ed" contenteditable style="position:absolute;top:600px;width:200px;height:30px"></div>
+<div class="twin" data-testid="compose" style="display:none">inline</div>
+<div role="dialog" style="position:absolute;top:650px;left:0;width:300px;height:60px;background:#fff"><div class="twin" data-testid="compose" id="twin2" style="width:200px;height:30px">in dialog</div></div>
+<div id="draft" contenteditable style="position:absolute;top:720px;width:300px;height:60px;white-space:pre-wrap"></div>
+<button id="realbtn" style="position:absolute;top:800px;left:10px;width:120px;height:40px">real</button>
 <script>
+  window.twinClicks = []; document.querySelectorAll('.twin').forEach(t => t.addEventListener('click', () => twinClicks.push(t.textContent)));
+  // Like X's Draft.js composer: Enter is a newline that re-renders the editor, dropping focus for a moment
+  const draft = document.getElementById('draft');
+  draft.addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); document.execCommand('insertLineBreak'); draft.blur();
+    requestAnimationFrame(() => draft.focus()); });
+  window.realClicks = []; document.getElementById('realbtn').addEventListener('click', e => realClicks.push(e.isTrusted));
   // Like Google Sheets' cell editor: only trusted input counts, and only while the document has focus
   window.trusted = [];
   document.getElementById('ed').addEventListener('input', e => { if (e.isTrusted && document.hasFocus()) window.trusted.push(e.data); });
@@ -55,7 +65,16 @@ try {
   ws = new WebSocket(ver.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   let seq = 0; const waiting = new Map();
-  ws.onmessage = ev => { const m = JSON.parse(ev.data); if (m.id && waiting.has(m.id)) { const { res, rej } = waiting.get(m.id); waiting.delete(m.id); m.error ? rej(new Error(m.error.message)) : res(m.result); } };
+  // CDP events go to the stubbed chrome.debugger.onEvent listeners, with the tab their session belongs to
+  const eventListeners = [];
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.id && waiting.has(m.id)) { const { res, rej } = waiting.get(m.id); waiting.delete(m.id); m.error ? rej(new Error(m.error.message)) : res(m.result); }
+    else if (m.method && m.sessionId) {
+      const tab = Number(Object.keys(sessions).find(k => sessions[k] === m.sessionId));
+      if (tab) eventListeners.forEach(fn => fn({ tabId: tab }, m.method, m.params));
+    }
+  };
   const send = (method, params = {}, sessionId) => new Promise((res, rej) => {
     const id = ++seq; waiting.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
@@ -77,11 +96,11 @@ try {
     debugger: {
       attach: async () => {}, detach: async () => { detaches++; },
       sendCommand: ({ tabId }, method, params) => send(method, params || {}, sessions[tabId]),
-      onEvent: { addListener() {} }, onDetach: { addListener: fn => detachListeners.push(fn) },
+      onEvent: { addListener: fn => eventListeners.push(fn), removeListener: fn => eventListeners.splice(eventListeners.indexOf(fn), 1) }, onDetach: { addListener: fn => detachListeners.push(fn) },
     },
     tabs: { get: async id => ({ id, windowId: 1, active: id === 1, status: 'complete', url: fakeUrl || await evaluate(id, 'location.href') }) },
     storage: { local: { get: async () => ({}), set: async () => {} } },
-    windows: { get: async id => ({ id, state: 'normal' }) },
+    windows: { get: async id => ({ id, state: 'normal', focused: true }) },
   };
   const { screenshotTab } = await import('./src/capture.js');
   const { setViewport, getViewportOverride } = await import('./src/viewport.js');
@@ -192,6 +211,18 @@ try {
   await evaluate(2, 'const w = document.createElement("input"); w.id = "sw"; w.addEventListener("keydown", e => e.preventDefault()); document.body.append(w), 1');
   const sw = await doAction(2, { action: 'type', selector: '#sw', text: 'zz', wait: 0 }, { source: 'native' });
   assert.match(sw.warning, /no input event reached the page/);
+  // With several matches the DOM-fallback click takes the visible one on top (a modal's copy) and names it
+  const tw = await doAction(2, { action: 'click', selector: '[data-testid="compose"]', wait: 0 }, { source: 'native' });
+  assert.strictEqual(tw.hit, 'div#twin2[data-testid="compose"] (in dialog)');
+  assert.deepStrictEqual(await evaluate(2, 'twinClicks'), ['in dialog']);
+  // Multi-line typing survives an editor that re-renders on Enter and refocuses itself a moment later
+  const dr = await doAction(2, { action: 'type', selector: '#draft', text: 'line1\nline2', wait: 0 }, { source: 'native' });
+  assert.ok(!dr.error, JSON.stringify(dr));
+  assert.strictEqual(await evaluate(2, 'document.getElementById("draft").innerText.trim()'), 'line1\nline2');
+  // real=true sends real (trusted) mouse input to the hidden tab
+  const rc = await doAction(2, { action: 'click', selector: '#realbtn', real: true, wait: 0 }, { source: 'native' });
+  assert.strictEqual(rc.mode, 'cdp mouse (tab hidden, real)', JSON.stringify(rc));
+  assert.deepStrictEqual(await evaluate(2, 'realClicks'), [true]);
   // Keystrokes carry real key codes (keydown-driven apps), clear=true replaces a field's text, Enter types "\r"
   await evaluate(2, 'window.keys = []; document.getElementById("k1").value = "old"; document.getElementById("k1").addEventListener("keydown", e => keys.push(e.code + ":" + e.keyCode)); document.getElementById("k1").addEventListener("keypress", e => keys.push("press:" + e.keyCode)); 1');
   await doAction(2, { action: 'type', selector: '#k1', text: 'B7', clear: true, wait: 0 }, { source: 'native' });
@@ -212,7 +243,22 @@ try {
   assert.match((await run('new Promise(() => {})', 1000)).error, /timed out after 1000ms/);
   fakeUrl = null;
 
-  console.log('capture.test OK (run_script return/await/promise/timeout, hidden-tab trusted typing, crop selector/ref/clip on visible+hidden with scroll restore, full-page tiles, viewport 390/768/1440 + mobile + reset, hidden-tab CDP keys)');
+  // A JS dialog blocks the page: the call that hits it says so (not a bare timeout), the next call fails fast,
+  // action=dialog closes it, and the page works again; then a reload goes through
+  fakeUrl = 'https://test.local/';
+  const dl = await runScript(1, 'alert("stuck here"); 1', 2000);
+  assert.match(dl.error, /showing a alert dialog \("stuck here"\)/, JSON.stringify(dl));
+  const t0 = Date.now();
+  assert.match((await runScript(1, '1 + 1', 2000)).error, /alert dialog/);
+  assert.ok(Date.now() - t0 < 1000, 'fails fast while the dialog is open');
+  const hd = await doAction(1, { action: 'dialog', accept: true, wait: 0 }, { source: 'native' });
+  assert.deepStrictEqual([hd.ok, hd.dialog.type], [true, 'alert'], JSON.stringify(hd));
+  assert.deepStrictEqual(await runScript(1, '1 + 1'), { result: 2, type: 'number' });
+  assert.match((await doAction(1, { action: 'dialog', wait: 0 }, { source: 'native' })).error, /no dialog is open/);
+  fakeUrl = null;
+  const rl = await doAction(1, { action: 'reload', wait: 0 }, { source: 'native' });
+  assert.ok(rl.ok && !rl.error, JSON.stringify(rl));
+  console.log('capture.test OK (js dialogs + reload, run_script return/await/promise/timeout, hidden-tab trusted typing, crop selector/ref/clip on visible+hidden with scroll restore, full-page tiles, viewport 390/768/1440 + mobile + reset, hidden-tab CDP keys)');
   process.exit(0);
 } catch (e) {
   console.error(e);
