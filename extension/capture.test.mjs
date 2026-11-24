@@ -222,6 +222,7 @@ try {
   // real=true sends real (trusted) mouse input to the hidden tab
   const rc = await doAction(2, { action: 'click', selector: '#realbtn', real: true, wait: 0 }, { source: 'native' });
   assert.strictEqual(rc.mode, 'cdp mouse (tab hidden, real)', JSON.stringify(rc));
+  assert.strictEqual(rc.hit, 'button "real"');
   assert.deepStrictEqual(await evaluate(2, 'realClicks'), [true]);
   // Keystrokes carry real key codes (keydown-driven apps), clear=true replaces a field's text, Enter types "\r"
   await evaluate(2, 'window.keys = []; document.getElementById("k1").value = "old"; document.getElementById("k1").addEventListener("keydown", e => keys.push(e.code + ":" + e.keyCode)); document.getElementById("k1").addEventListener("keypress", e => keys.push("press:" + e.keyCode)); 1');
