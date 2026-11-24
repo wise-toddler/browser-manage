@@ -160,9 +160,11 @@ async function cdpInput(tabId, p, cmd, hidden) {
         const hit = (await cmd('Runtime.evaluate', { expression: `(() => { const e = document.elementFromPoint(${x}, ${y}); if (!e) return null;
           const t = (e.innerText || e.getAttribute('aria-label') || '').trim().slice(0, 40), tid = e.getAttribute('data-testid');
           return e.tagName.toLowerCase() + (tid ? '[data-testid="' + tid + '"]' : '') + (t ? ' "' + t + '"' : ''); })()`, returnByValue: true })).result.value;
-        // real=true on a hidden tab: hit-testing needs a frame, so pump one around each event (guarded, no retry)
+        // real=true on a hidden tab: hit-testing needs a frame, so pump one first (guarded, no retry). Press and
+        // release go back to back: a pump in between re-lays-out the page (the capture), and on X the release then
+        // hit another element, so the click went to their common ancestor instead of the button
+        await pumpFrames(cmd, 1);
         for (const [type, extra] of [['mouseMoved', {}], ['mousePressed', { button, clickCount }], ['mouseReleased', { button, clickCount }]]) {
-          await pumpFrames(cmd, 1);
           await input('Input.dispatchMouseEvent', { type, x, y, ...extra }, `click ${type}`);
         }
         await pumpFrames(cmd, 1);
