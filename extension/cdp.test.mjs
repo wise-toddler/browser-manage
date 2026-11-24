@@ -11,6 +11,7 @@ globalThis.chrome = {
     detach: async ({ tabId }) => { log.push(['detach', tabId]); },
     sendCommand: (t, method) => method === 'Hang' ? new Promise(() => {}) : Promise.resolve({ method }),
     onDetach: { addListener: fn => { onDetach = fn; } },
+    onEvent: { addListener() {} },
   },
 };
 const { withDebugger } = await import('./src/cdp.js');

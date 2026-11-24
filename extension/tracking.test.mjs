@@ -8,7 +8,7 @@ const store = {};
 const on = {};
 const event = name => ({ addListener: fn => { on[name] = fn; } });
 globalThis.chrome = {
-  debugger: { onDetach: event('detach') },
+  debugger: { onDetach: event('detach'), onEvent: event('event') },
   // In-memory async storage with random delays, so unserialized read-modify-writes would interleave and lose entries
   storage: { local: {
     get: async (keys, cb) => {
