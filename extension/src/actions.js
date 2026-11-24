@@ -156,13 +156,17 @@ async function cdpInput(tabId, p, cmd, hidden) {
       if (x == null || y == null) return { error: 'click needs x,y, selector or ref' };
       const button = p.button || 'left', clickCount = p.double ? 2 : 1;
       if (hidden) {
+        // What's under the point in this tab's own layout: x,y read off another view can land beside the target
+        const hit = (await cmd('Runtime.evaluate', { expression: `(() => { const e = document.elementFromPoint(${x}, ${y}); if (!e) return null;
+          const t = (e.innerText || e.getAttribute('aria-label') || '').trim().slice(0, 40), tid = e.getAttribute('data-testid');
+          return e.tagName.toLowerCase() + (tid ? '[data-testid="' + tid + '"]' : '') + (t ? ' "' + t + '"' : ''); })()`, returnByValue: true })).result.value;
         // real=true on a hidden tab: hit-testing needs a frame, so pump one around each event (guarded, no retry)
         for (const [type, extra] of [['mouseMoved', {}], ['mousePressed', { button, clickCount }], ['mouseReleased', { button, clickCount }]]) {
           await pumpFrames(cmd, 1);
           await input('Input.dispatchMouseEvent', { type, x, y, ...extra }, `click ${type}`);
         }
         await pumpFrames(cmd, 1);
-        return settled(tabId, p, { mode: 'cdp mouse (tab hidden, real)', at: { x: Math.round(x), y: Math.round(y) } });
+        return settled(tabId, p, { mode: 'cdp mouse (tab hidden, real)', at: { x: Math.round(x), y: Math.round(y) }, hit });
       }
       await mouse('mouseMoved', x, y);
       await mouse('mousePressed', x, y, { button, clickCount });
