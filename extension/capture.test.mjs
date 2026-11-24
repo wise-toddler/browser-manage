@@ -30,6 +30,8 @@ writeFileSync(page, `<!doctype html><html><head><title>Capture</title><style>
 <div role="dialog" style="position:absolute;top:650px;left:0;width:300px;height:60px;background:#fff"><div class="twin" data-testid="compose" id="twin2" style="width:200px;height:30px">in dialog</div></div>
 <div id="draft" contenteditable style="position:absolute;top:720px;width:300px;height:60px;white-space:pre-wrap"></div>
 <button id="realbtn" style="position:absolute;top:800px;left:10px;width:120px;height:40px">real</button>
+<button id="covered" style="position:absolute;top:900px;left:10px;width:100px;height:30px">covered</button>
+<div id="overlay" style="position:absolute;top:890px;left:0;width:200px;height:60px;background:rgba(0,0,0,.1)"></div>
 <script>
   window.twinClicks = []; document.querySelectorAll('.twin').forEach(t => t.addEventListener('click', () => twinClicks.push(t.textContent)));
   // Like X's Draft.js composer: Enter is a newline that re-renders the editor, dropping focus for a moment
@@ -37,6 +39,7 @@ writeFileSync(page, `<!doctype html><html><head><title>Capture</title><style>
   draft.addEventListener('keydown', e => { if (e.key !== 'Enter') return; e.preventDefault(); document.execCommand('insertLineBreak'); draft.blur();
     requestAnimationFrame(() => draft.focus()); });
   window.realClicks = []; document.getElementById('realbtn').addEventListener('click', e => realClicks.push(e.isTrusted));
+  window.coveredClicks = 0; document.getElementById('covered').addEventListener('click', () => coveredClicks++);
   // Like Google Sheets' cell editor: only trusted input counts, and only while the document has focus
   window.trusted = [];
   document.getElementById('ed').addEventListener('input', e => { if (e.isTrusted && document.hasFocus()) window.trusted.push(e.data); });
@@ -224,6 +227,12 @@ try {
   assert.strictEqual(rc.mode, 'cdp mouse (tab hidden, real)', JSON.stringify(rc));
   assert.strictEqual(rc.hit, 'button "real"');
   assert.deepStrictEqual(await evaluate(2, 'realClicks'), [true]);
+  // A covered target is refused, not clicked through to whatever is on top (visible tab, and real on a hidden one)
+  for (const [tab, extra] of [[1, {}], [2, { real: true }]]) {
+    const cv = await doAction(tab, { action: 'click', selector: '#covered', wait: 0, ...extra }, { source: 'native' });
+    assert.match(cv.error, /click refused: #covered is not what's on top at its centre \(div\b/, JSON.stringify(cv));
+  }
+  assert.strictEqual(await evaluate(1, 'coveredClicks') + await evaluate(2, 'coveredClicks'), 0);
   // Keystrokes carry real key codes (keydown-driven apps), clear=true replaces a field's text, Enter types "\r"
   await evaluate(2, 'window.keys = []; document.getElementById("k1").value = "old"; document.getElementById("k1").addEventListener("keydown", e => keys.push(e.code + ":" + e.keyCode)); document.getElementById("k1").addEventListener("keypress", e => keys.push("press:" + e.keyCode)); 1');
   await doAction(2, { action: 'type', selector: '#k1', text: 'B7', clear: true, wait: 0 }, { source: 'native' });

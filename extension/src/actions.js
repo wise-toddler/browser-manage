@@ -149,6 +149,11 @@ async function cdpInput(tabId, p, cmd, hidden) {
   if (p.selector && p.action !== 'type' && p.action !== 'key') {
     const r = await cmd('Runtime.evaluate', { expression: `(${selectorCenter})(${JSON.stringify(p.selector)})`, returnByValue: true });
     if (!r.result.value) return { error: notFound(p) };
+    // A real click goes to whatever is on top at that point: when that isn't the target (a modal not open yet, an
+    // overlay, the target off-screen) it would land on something else, on X a feed post. Refuse instead
+    if (p.action === 'click' && !r.result.value.onTop) {
+      return { error: `click refused: ${p.ref != null ? `ref ${p.ref}` : p.selector} is not what's on top at its centre (${r.result.value.top} is); nothing was clicked. Read the page again for the right element` };
+    }
     ({ x, y } = r.result.value);
   }
   switch (p.action) {
