@@ -253,6 +253,12 @@ try {
   assert.match((await run('new Promise(() => {})', 1000)).error, /timed out after 1000ms/);
   fakeUrl = null;
 
+  // paint keeps a hidden tab rendering: a chain of frame + timer + canvas steps started there runs to the end
+  await evaluate(2, `window.chain = ['start']; requestAnimationFrame(() => { chain.push('raf1'); setTimeout(() => requestAnimationFrame(() => {
+    const c = document.createElement('canvas'); c.getContext('2d').fillRect(0, 0, 5, 5); c.toBlob(b => chain.push('blob ' + (b.size > 0))); }), 100); }); 1`);
+  const pt = await doAction(2, { action: 'paint', ms: 1500, wait: 0 }, { source: 'native' });
+  assert.deepStrictEqual([pt.ok, pt.method], [true, 'screencast'], JSON.stringify(pt));
+  assert.deepStrictEqual(await evaluate(2, 'chain'), ['start', 'raf1', 'blob true']);
   // A JS dialog blocks the page: the call that hits it says so (not a bare timeout), the next call fails fast,
   // action=dialog closes it, and the page works again; then a reload goes through
   fakeUrl = 'https://test.local/';
@@ -268,7 +274,7 @@ try {
   fakeUrl = null;
   const rl = await doAction(1, { action: 'reload', wait: 0 }, { source: 'native' });
   assert.ok(rl.ok && !rl.error, JSON.stringify(rl));
-  console.log('capture.test OK (js dialogs + reload, run_script return/await/promise/timeout, hidden-tab trusted typing, crop selector/ref/clip on visible+hidden with scroll restore, full-page tiles, viewport 390/768/1440 + mobile + reset, hidden-tab CDP keys)');
+  console.log('capture.test OK (paint, js dialogs + reload, run_script return/await/promise/timeout, hidden-tab trusted typing, crop selector/ref/clip on visible+hidden with scroll restore, full-page tiles, viewport 390/768/1440 + mobile + reset, hidden-tab CDP keys)');
   process.exit(0);
 } catch (e) {
   console.error(e);
