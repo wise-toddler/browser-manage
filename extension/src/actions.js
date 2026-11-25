@@ -282,6 +282,38 @@ async function reloadTab(tabId, p) {
   }
 }
 
+// Keep a hidden tab painting for ms (max 15s): its page thinks it's focused and gets frames all along, so a
+// multi-step flow that runs across frames and timers (an image editor, an upload pipeline) can finish.
+// method: 'screencast' (the browser streams frames; each is acknowledged) or 'pump' (a tiny capture every ~50ms)
+async function paintFor(tabId, p) {
+  const ms = Math.min(Math.max(Number(p.ms) || 3000, 100), 15000);
+  return withDebugger(tabId, async cmd => {
+    await cmd('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+    focusEmulated.add(tabId);
+    const end = Date.now() + ms;
+    let frames = 0;
+    if (p.method === 'pump') {
+      while (Date.now() < end) { await pumpFrames(cmd, 1); frames++; await sleep(50); }
+      return { ok: true, method: 'pump', ms, frames };
+    }
+    const onEvent = ({ tabId: t }, method, params) => {
+      if (t !== tabId || method !== 'Page.screencastFrame') return;
+      frames++;
+      chrome.debugger.sendCommand({ tabId }, 'Page.screencastFrameAck', { sessionId: params.sessionId }).catch(() => {});
+    };
+    chrome.debugger.onEvent.addListener(onEvent);
+    try {
+      await cmd('Page.enable');
+      await cmd('Page.startScreencast', { format: 'jpeg', quality: 1, maxWidth: 32, maxHeight: 32, everyNthFrame: 1 });
+      await sleep(Math.max(0, end - Date.now()));
+    } finally {
+      await cmd('Page.stopScreencast').catch(() => {});
+      chrome.debugger.onEvent.removeListener(onEvent);
+    }
+    return { ok: true, method: 'screencast', ms, frames };
+  });
+}
+
 // Close the JS dialog open in the tab (accept=false cancels; text answers a prompt)
 async function handleDialog(tabId, p) {
   return withDebugger(tabId, async cmd => {
@@ -316,6 +348,7 @@ export async function doAction(tabId, p, ctx) {
       return { ok: true, url: (await chrome.tabs.get(tabId)).url };
     }
     if (p.action === 'reload') return await reloadTab(tabId, p);
+    if (p.action === 'paint') return await paintFor(tabId, p);
     if (p.action === 'dialog') return await handleDialog(tabId, p);
     if (p.action === 'back' || p.action === 'forward') {
       await (p.action === 'back' ? chrome.tabs.goBack(tabId) : chrome.tabs.goForward(tabId));

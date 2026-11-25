@@ -7,9 +7,9 @@ from tools import tool, schema, text, ext_error, tab_id_error
 from tools.capture import screenshot
 
 
-@tool("browser_action", "Act in a tab with real mouse/keyboard events: click (x,y, selector or ref), type text, press key, scroll, navigate, back/forward, reload (hard=true skips the cache; accepts the page's own 'Reload site?' prompt), dialog (close an alert/confirm/prompt/beforeunload dialog the page is showing: accept=true|false, text for a prompt), activate. With several matches for a selector the visible, topmost one is used and reported as `hit`. activate steals the user's window focus and needs allow_focus=true. On a background tab type/key are real input (works in editors like Google Sheets: type clear=true selector='#t-name-box' text='B7\\n' to select a cell, then type selector='#waffle-rich-text-editor' text='value\\n'), while click/scroll fall back to synthetic DOM events and return a `warning` (editors ignore them; read the result back); click real=true sends real mouse input there anyway, for controls that ignore synthetic clicks. Returns a screenshot after the action (saved to /tmp, pruned after a day) unless screenshot=false.", schema({
+@tool("browser_action", "Act in a tab with real mouse/keyboard events: click (x,y, selector or ref), type text, press key, scroll, navigate, back/forward, reload (hard=true skips the cache; accepts the page's own 'Reload site?' prompt), dialog (close an alert/confirm/prompt/beforeunload dialog the page is showing: accept=true|false, text for a prompt), paint (keep a background tab rendering for ms, e.g. 5000, so a multi-step flow like an image crop/upload that runs across frames and timers can finish; call it right after the upload/click that starts the flow), activate. With several matches for a selector the visible, topmost one is used and reported as `hit`. activate steals the user's window focus and needs allow_focus=true. On a background tab type/key are real input (works in editors like Google Sheets: type clear=true selector='#t-name-box' text='B7\\n' to select a cell, then type selector='#waffle-rich-text-editor' text='value\\n'), while click/scroll fall back to synthetic DOM events and return a `warning` (editors ignore them; read the result back); click real=true sends real mouse input there anyway, for controls that ignore synthetic clicks. Returns a screenshot after the action (saved to /tmp, pruned after a day) unless screenshot=false.", schema({
     "tab_id": {"type": "integer"},
-    "action": {"type": "string", "enum": ["click", "type", "key", "scroll", "navigate", "back", "forward", "reload", "dialog", "activate"]},
+    "action": {"type": "string", "enum": ["click", "type", "key", "scroll", "navigate", "back", "forward", "reload", "dialog", "paint", "activate"]},
     "x": {"type": "number"}, "y": {"type": "number"},
     "selector": {"type": "string", "description": "CSS selector; scrolled into view, its center is used as x,y"},
     "ref": {"type": ["string", "integer"], "description": "Element ref from browser_read_page / browser_find; used like selector"},
@@ -23,6 +23,8 @@ from tools.capture import screenshot
     "real": {"type": "boolean", "description": "for click on a background tab: real mouse input instead of synthetic DOM events", "default": False},
     "hard": {"type": "boolean", "description": "for reload: bypass the cache", "default": False},
     "accept": {"type": "boolean", "description": "for dialog: true = OK/Leave, false = Cancel/Stay", "default": True},
+    "ms": {"type": "integer", "description": "for paint: how long to keep a hidden tab painting (100-15000, default 3000)"},
+    "method": {"type": "string", "enum": ["screencast", "pump"], "description": "for paint: how frames are produced (default screencast)"},
     "wait": {"type": "integer", "description": "ms to wait after the action before screenshot, default 400"},
     "screenshot": {"type": "boolean", "default": True},
     "allow_focus": {"type": "boolean", "description": "Permit stealing the user's window focus (activate); refused by the extension otherwise", "default": False},

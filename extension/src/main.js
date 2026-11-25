@@ -71,7 +71,7 @@ export const ACTIONS = {
 // Actions that work inside the page; on a browser page they'd only hit the browser's refusal (or hang)
 const IN_PAGE = new Set(['screenshot', 'action', 'runScript', 'readPage', 'findInPage', 'getPageText', 'waitFor', 'uploadFiles',
   'debugCapture', 'readConsole', 'readNetwork', 'setViewport']);
-const TAB_LEVEL_ACTIONS = new Set(['navigate', 'back', 'forward', 'activate', 'reload', 'dialog']);
+const TAB_LEVEL_ACTIONS = new Set(['navigate', 'back', 'forward', 'activate', 'reload', 'dialog', 'paint']);
 
 async function browserPageError(action, payload) {
   if (!IN_PAGE.has(action) || typeof payload.tabId !== 'number') return null;
