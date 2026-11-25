@@ -2,7 +2,7 @@
 // Reading runs through chrome.scripting in the isolated world: no debugger needed, so it works on hidden
 // tabs, on tabs where another extension's frame blocks the debugger, and never flashes the infobar.
 import { withDebugger, inPage } from './cdp.js';
-import { snapshotPage, pageText, waitProbe, uploadTarget, setInputFiles } from './page.js';
+import { snapshotPage, pageText, waitProbe, uploadTarget, describeUploadTarget, setInputFiles } from './page.js';
 import { withTimeout, sleep, isForeignFrameError, CDP_TIMEOUT_MS } from './util.js';
 
 const WAIT_POLL_MS = 200;
@@ -80,12 +80,15 @@ export async function uploadFiles(tabId, p = {}) {
     return await withDebugger(tabId, async (cmd) => {
       const r = await cmd('Runtime.evaluate', { expression: `(${uploadTarget})(${JSON.stringify(selector)})`, returnByValue: false });
       if (r.result.type === 'string') return { error: r.result.value };
+      let which = {};
       try {
         await cmd('DOM.setFileInputFiles', { files: p.paths, objectId: r.result.objectId });
+        // Name the input the files went into: with several matching inputs, a wrong pick shows up here, not later
+        which = (await cmd('Runtime.callFunctionOn', { objectId: r.result.objectId, functionDeclaration: String(describeUploadTarget), arguments: [{ value: selector }], returnByValue: true })).result.value || {};
       } finally {
         cmd('Runtime.releaseObject', { objectId: r.result.objectId }).catch(() => {});
       }
-      return { ok: true, uploaded: p.paths.length, mode: 'debugger' };
+      return { ok: true, uploaded: p.paths.length, mode: 'debugger', ...which };
     });
   } catch (e) {
     if (!isForeignFrameError(e)) return { error: e.message };
