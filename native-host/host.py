@@ -42,6 +42,11 @@ def send_message(message):
         log("Extension port broken (EPIPE), exiting")
         sys.exit(0)
 
+def profile_name(name):
+    """A profile name as the registry keeps it (lowercase letters, digits, - and _, max 24), or None."""
+    clean = ''.join(c for c in str(name or '').strip().lower() if c.isalnum() or c in '-_')[:24]
+    return clean or None
+
 def _edit_registry(fn):
     """Read-modify-write the registry under an exclusive lock (one host per profile runs concurrently)."""
     with open(REGISTRY_FILE + '.lock', 'w') as lock:
@@ -74,6 +79,8 @@ class Host:
         # Extension request id we assigned -> (client socket, the client's own id, sent_at)
         self.pending = {}
         self._next_id = 0
+        # Name the user gave this profile in the popup ("work"); MCP callers can pass it as --profile
+        self.name = None
 
         # Bytes read from the extension but not yet a complete frame; large messages (screenshots)
         # arrive across many reads, and dropping a partial read would desync the whole stream
@@ -168,6 +175,7 @@ class Host:
         _edit_registry(lambda r: r.__setitem__(f"{browser}-{profile}", {
             "browser": browser,
             "profile": profile,
+            "name": self.name,
             "cmd_file": self.cmd_file,
             "result_file": self.result_file,
             "sock": self.sock_path,
@@ -280,7 +288,13 @@ class Host:
         mid = message.get('id')
         if message.get('action') == 'identify':
             payload = message.get('payload', {})
+            self.name = profile_name(payload.get('name'))
             self.set_ipc_paths(payload.get('browser', 'unknown'), payload.get('profile', 'default'))
+        elif message.get('action') == 'rename':
+            # The popup renamed this profile: only the registry entry changes, the socket stays up
+            self.name = profile_name(message.get('payload', {}).get('name'))
+            if self.identity:
+                self.update_registry(self.identity['browser'], self.identity['profile'])
         elif mid == 'ping':
             # Pong: only a real round-trip proves the extension is alive
             if self.identity:

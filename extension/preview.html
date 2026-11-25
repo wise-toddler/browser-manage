@@ -24,6 +24,10 @@
     .header .profile-badge {
       font-size: 11px; background: #1e293b; padding: 3px 8px; border-radius: 10px; color: #94a3b8;
     }
+    .header .profile-name {
+      width: 110px; font-size: 11px; background: #0f172a; border: 1px solid #1e293b; border-radius: 10px;
+      padding: 3px 8px; color: #e2e8f0; margin-right: 6px;
+    }
 
     /* Stats cards */
     .stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 14px; }
@@ -137,7 +141,7 @@
 <body>
   <div class="header">
     <h1>Tab Manager</h1>
-    <span class="profile-badge" id="profile-badge">loading...</span>
+    <div><input class="profile-name" id="profile-name" placeholder="name: work…" title="Name this profile; agents can then use --profile=<name>. Enter to save"><span class="profile-badge" id="profile-badge">loading...</span></div>
   </div>
 
   <div class="stats-row" id="stats-row">

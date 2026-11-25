@@ -65,6 +65,13 @@ export const ACTIONS = {
 
   // popup / extension pages
   getPendingChanges: () => getPendingChanges(),
+  // Popup: name this profile; the host puts it in the registry so --profile=<name> finds it
+  setProfileName: async p => {
+    const name = String(p.name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 24);
+    await chrome.storage.local.set({ profileName: name || null });
+    if (port) port.postMessage({ action: 'rename', payload: { name: name || null } });
+    return { ok: true, name: name || null };
+  },
   updatePendingChanges: p => { setPendingChanges(p.changes); return { ok: true }; },
 };
 
@@ -100,13 +107,14 @@ async function getBrowserInfo() {
   let browser = 'chrome';
   if (ua.includes('Edg/')) browser = 'edge';
   // chrome.runtime.id is same across profiles for unpacked extensions, so use a persistent UUID
-  const data = await chrome.storage.local.get('profileId');
+  const data = await chrome.storage.local.get(['profileId', 'profileName']);
   let profileId = data.profileId;
   if (!profileId) {
     profileId = crypto.randomUUID().slice(0, 8);
     await chrome.storage.local.set({ profileId });
   }
-  return { browser, profile: profileId };
+  // name: what the user called this profile in the popup ("work"); MCP callers can pass it as --profile
+  return { browser, profile: profileId, name: data.profileName || null };
 }
 
 // Connect to native host on startup

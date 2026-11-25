@@ -42,8 +42,8 @@ Manage tabs across all connected Chrome and Edge profiles via the `browser-manag
 
 ```bash
 mcp-call browser-manage browser_list_profiles
-mcp-call browser-manage browser_get_tabs_ext --profile=edge-54f24d93
-mcp-call browser-manage browser_get_memory --profile=edge-59a2f80d
+mcp-call browser-manage browser_get_tabs_ext --profile=work
+mcp-call browser-manage browser_get_memory --profile=personal
 mcp-call browser-manage browser_get_stale_tabs --threshold_hours=1
 mcp-call browser-manage browser_search_all_tabs --query=github
 ```
@@ -61,4 +61,4 @@ mcp-call browser-manage browser_search_all_tabs --query=github
 - Never close grouped tabs without asking
 - Keep research/GCP/Cloud console tabs unless asked
 - Close: search results, OAuth pages, new tabs, login redirects
-- Use `--profile` to target specific browser profile
+- Use `--profile=work` / `--profile=personal` (names set in the popup; IDs work too). It's required: no default

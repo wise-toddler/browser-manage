@@ -32,9 +32,10 @@ async function init() {
     pendingChanges = pending;
 
     // Set profile badge
-    const data = await chrome.storage.local.get('profileId');
+    const data = await chrome.storage.local.get(['profileId', 'profileName']);
     const browser = navigator.userAgent.includes('Edg/') ? 'Edge' : 'Chrome';
     $('profile-badge').textContent = `${browser} · ${data.profileId || 'unknown'}`;
+    $('profile-name').value = data.profileName || '';
 
     renderStats();
     renderStatsLoading();
@@ -395,6 +396,14 @@ async function withBusy(btn, busyLabel, fn) {
     btn.disabled = false;
   }
 }
+
+// Profile name: Enter saves it (agents can then pass --profile=<name>)
+$('profile-name').addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  const r = await send('setProfileName', { name: $('profile-name').value });
+  $('profile-name').value = r?.name || '';
+  showToast(r?.name ? `Profile named "${r.name}"` : 'Profile name cleared');
+});
 
 // Close duplicates
 $('btn-dupes').addEventListener('click', () => withBusy($('btn-dupes'), 'Finding...', async () => {
