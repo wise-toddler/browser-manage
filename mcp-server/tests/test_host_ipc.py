@@ -63,7 +63,7 @@ class FakeExtension:
         self.proc = subprocess.Popen([sys.executable, HOST, "chrome-extension://test/"], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, env={**os.environ, "TAB_MANAGER_DIR": TMP})
         self.lock = threading.Lock()
-        self.send({"action": "identify", "payload": {"browser": "edge", "profile": "testprof"}})
+        self.send({"action": "identify", "payload": {"browser": "edge", "profile": "testprof", "name": "Work"}})
         threading.Thread(target=self.loop, daemon=True).start()
 
     def send(self, msg):
@@ -117,8 +117,15 @@ def main():
 
     t0 = time.time()
     r = ipc.send_extension_command("echo", {})
-    assert "no profile given" in r.get("error", "") and PROFILE in r["error"] and time.time() - t0 < 1, r
-    print("PASS no profile fails fast and lists the active ones")
+    assert "no profile given" in r.get("error", "") and "work (edge-testprof)" in r["error"] and time.time() - t0 < 1, r
+    print("PASS no profile fails fast and lists the active ones by name")
+
+    assert ipc.send_extension_command("echo", {"n": "named"}, profile="work") == {"n": "named"}
+    ext.send({"action": "rename", "payload": {"name": "Day Job"}})
+    assert wait_for(lambda: (entry() or {}).get("name") == "dayjob"), entry()
+    assert ipc.send_extension_command("echo", {"n": "renamed"}, profile="dayjob") == {"n": "renamed"}
+    assert "Profile 'work' not found" in ipc.send_extension_command("echo", {}, profile="work").get("error", "")
+    print("PASS --profile by popup name; a rename updates the registry live")
 
     results = {}
     def worker(i):

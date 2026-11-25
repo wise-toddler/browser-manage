@@ -27,11 +27,21 @@ def get_active_profiles() -> list:
 
 
 def resolve_profile(profile: str):
-    """Registry entry whose 'browser-profile' key contains `profile`, or None."""
-    for p in get_active_profiles():
+    """Registry entry named `profile` (set in the popup, e.g. 'work'), else one whose 'browser-profile' key contains it, or None."""
+    active = get_active_profiles()
+    for p in active:
+        if p.get('name') and p['name'] == profile.strip().lower():
+            return p
+    for p in active:
         if profile in f"{p['browser']}-{p['profile']}":
             return p
     return None
+
+
+def profile_label(p: dict) -> str:
+    """'work (edge-54f24d93)' for a named profile, else 'edge-54f24d93'."""
+    key = f"{p['browser']}-{p['profile']}"
+    return f"{p['name']} ({key})" if p.get('name') else key
 
 
 def send_to_entry(entry: dict, action: str, payload: dict, timeout: int = 10) -> dict:
@@ -47,7 +57,7 @@ def send_to_entry(entry: dict, action: str, payload: dict, timeout: int = 10) ->
 
 def send_extension_command(action: str, payload: dict, timeout: int = 10, profile: str = None) -> dict:
     """Send a command to the extension of `profile` and return its result."""
-    active = [f"{p['browser']}-{p['profile']}" for p in get_active_profiles()]
+    active = [profile_label(p) for p in get_active_profiles()]
     # No default: with several profiles a guess acts on the wrong browser, and the old default IPC files had no reader
     if not profile:
         return {"error": f"no profile given: pass profile (--profile=...), one of {active}"}

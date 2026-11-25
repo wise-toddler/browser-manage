@@ -57,7 +57,7 @@ Note: before #55 (2026-10-19), typing several refs into the Sheets name box coul
 
 Focus-changing calls (`activate`, `open_tabs active=true`) need `allow_focus=true`.
 
-All extension-based tools accept an optional `--profile` parameter to target a specific browser profile.
+All extension-based tools take `--profile`: the name you gave the profile in the popup (e.g. `--profile=work`, set it in the field next to the profile badge) or its ID (`edge-54f24d93`). Leaving it out fails at once with the list of connected profiles.
 
 ## Setup
 
@@ -138,7 +138,7 @@ cat /tmp/tab-manager-registry.json | python3 -m json.tool
 
 # Test a specific profile (tool output is already JSON: pipe it straight to jq / python3 -m json.tool;
 # mcp-call's -o flag is only for --servers / --tools / --search)
-mcp-call browser-manage browser_get_tabs_ext --profile=<id from browser_list_profiles> | python3 -m json.tool
+mcp-call browser-manage browser_get_tabs_ext --profile=work | python3 -m json.tool
 ```
 
 ## License
