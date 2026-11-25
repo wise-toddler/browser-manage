@@ -24,6 +24,7 @@ writeFileSync(page, `<!doctype html><html><head><title>BM Test</title></head><bo
   <button type="button" id="login-btn">Log in</button>
   <input id="file" type="file" multiple>
 </form>
+<div role="dialog"><input id="dfile" type="file" data-testid="dlgFile"></div>
 <div role="button" aria-label="Refresh dashboard" id="refresh">↻</div>
 <div id="open-panel" style="cursor:pointer" onclick="window.opened=(window.opened||0)+1"><span>Open panel</span></div>
 <div style="display:none"><button>Secret</button></div>
@@ -172,6 +173,11 @@ try {
   assert.match((await uploadFiles(TAB, { selector: '#file', paths: [f1] })).error, /too large for the in-page fallback/);
   block(false);
   assert.match((await uploadFiles(TAB, { selector: '#email', paths: [f1] })).error, /not a file input/);
+  // Several file inputs match: the one in the open dialog gets the file, and the result names it
+  r = await uploadFiles(TAB, { selector: 'input[type=file]', paths: [f1] });
+  assert.deepStrictEqual([r.ok, r.target, r.matches], [true, 'input[data-testid="dlgFile"] (in dialog)', 2], JSON.stringify(r));
+  assert.strictEqual(await evaluate("document.getElementById('dfile').files.length"), 1);
+  assert.match((await uploadFiles(TAB, { selector: '#nope', paths: [f1] })).error, /no element matches #nope/);
 
   // wait_for (page adds #late at 1.2s, removes #spinner at 1.5s; timings are from page load)
   r = await waitFor(TAB, { selector: '#late', timeoutMs: 5000 }); assert(r.ok, JSON.stringify(r));

@@ -352,16 +352,26 @@ export function waitProbe(p) {
 
 // upload, debugger path: the file input itself (Runtime.evaluate keeps it as a remote object), or an error string
 export function uploadTarget(sel) {
-  const deepQuery = (s, root = document) => {
-    const hit = root.querySelector(s);
-    if (hit) return hit;
-    for (const e of root.querySelectorAll('*')) if (e.shadowRoot) { const h = deepQuery(s, e.shadowRoot); if (h) return h; }
-    return null;
+  const deepAll = (q, root = document, out = []) => {
+    out.push(...root.querySelectorAll(q));
+    for (const x of root.querySelectorAll('*')) if (x.shadowRoot) deepAll(q, x.shadowRoot, out);
+    return out;
   };
-  const el = deepQuery(sel);
-  if (!el) return `no element matches ${sel}`;
-  if (el.tagName !== 'INPUT' || el.type !== 'file') return `element is <${el.tagName.toLowerCase()}${el.type ? ` type=${el.type}` : ''}>, not a file input`;
-  return el;
+  const all = deepAll(sel);
+  if (!all.length) return `no element matches ${sel}`;
+  const inputs = all.filter(x => x.tagName === 'INPUT' && x.type === 'file');
+  if (!inputs.length) { const el = all[0]; return `element is <${el.tagName.toLowerCase()}${el.type ? ` type=${el.type}` : ''}>, not a file input`; }
+  // Pages keep several hidden file inputs (X: composer + profile dialog); the one in an open dialog is the live one
+  return inputs.find(x => x.closest('[role=dialog],[aria-modal=true]')) || inputs[0];
+}
+
+// Describes the file input an upload went into, with how many inputs the selector matched (this = the input)
+export function describeUploadTarget(sel) {
+  const tid = this.getAttribute('data-testid');
+  return {
+    target: 'input' + (tid ? `[data-testid="${tid}"]` : '') + (this.accept ? `[accept="${this.accept.slice(0, 40)}"]` : '') + (this.closest('[role=dialog],[aria-modal=true]') ? ' (in dialog)' : ''),
+    matches: document.querySelectorAll(sel).length,
+  };
 }
 
 // upload, no-debugger fallback: build Files from base64 and assign them like a user pick (input + change fire)
