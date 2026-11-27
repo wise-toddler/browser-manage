@@ -1,6 +1,6 @@
 [project]
 name = "browser-tabs-mcp"
-version = "0.1.0"
+version = "2.0.0"
 description = "MCP server for browser tab management"
 requires-python = ">=3.10"
 dependencies = [
